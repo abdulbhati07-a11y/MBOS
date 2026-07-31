@@ -67,15 +67,23 @@ Current state: `PurchaseOrderRecord.supplierName` is a stored string, so deactiv
 
 ---
 
-### DEBT-004 — Customer order history uses name-string match, not FK
+### DEBT-004 — Customer order history FK (partially resolved)
 
 **Where it needs to land:** Section 8 (Core Modules Part A — Customers) and Section 6 (API Design, customer-order relationship)
 
-**What needs to be written:** The customer↔order relationship requires a customer ID foreign key in the Orders schema. Currently `MOCK_ORDERS.customerName` is matched by string equality against `CustomerRecord.name`. Two customers with the same name would collide. The Customers detail view, order history tab, and any customer-level reporting depend on this being a real FK relationship in the backend.
+**What needs to be written:** The API Orders schema must include `customerId` as a non-nullable FK to the Customers table. The backend must enforce referential integrity.
 
-**Source:** `src/components/customers/CustomerDetailDialog.tsx` — TODO comment on the filter. `src/lib/mock-data/customers.ts` — `getCustomerStats` helper comment. Identified during Step 6 review.
+**Current state (resolved at mock-data layer):**
+- `OrderRecord` now has `customerId: string | null`
+- All seed `MOCK_ORDERS` have `customerId` populated (matching `CustomerRecord.id`)
+- `getCustomerStats` and `CustomerDetailDialog` both filter by `customerId` — name-string collision risk eliminated for seed data
+- `NewOrderForm` (POS) sets `customerId: null` on new orders — known, explicit limitation, not a silent wrong answer
 
-**Status:** Open
+**Remaining open item:** POS-created orders will not appear in any customer's order history until (1) `NewOrderForm` gains a `CustomerRecord` selector UI, and (2) the backend Orders API enforces `customerId` as required. Both are backend integration phase work.
+
+**Source:** `src/lib/mock-data/orders.ts`, `src/lib/mock-data/customers.ts`, `src/components/customers/CustomerDetailDialog.tsx`, `src/components/sales/NewOrderForm.tsx`. Identified during Step 6 review; mock-data layer resolved after Step 7 close.
+
+**Status:** Partially resolved — mock data layer fixed; POS customer-linking deferred to backend integration
 
 ---
 

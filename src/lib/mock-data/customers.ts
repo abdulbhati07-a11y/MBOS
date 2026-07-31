@@ -2,9 +2,9 @@
 // src/lib/mock-data/customers.ts
 // CustomerRecord type, MOCK_CUSTOMERS seed data, and getCustomerStats helper.
 //
-// getCustomerStats lives here because it is a pure derivation over MOCK_ORDERS
-// that only exists as a workaround for the absence of a real FK relationship.
-// When a backend exists, this file gets replaced and the helper disappears.
+// getCustomerStats matches by customerId (FK), not customerName.
+// Seed MOCK_ORDERS have customerId populated. POS-created orders have
+// customerId: null until backend customer-linking is built (DEBT-004).
 // ---------------------------------------------------------------------------
 
 import { MOCK_ORDERS } from "@/lib/mock-data/orders"
@@ -18,8 +18,8 @@ export type CustomerRecord = {
   notes: string
   isActive: boolean
   // totalOrders and totalSpend are intentionally NOT stored here.
-  // Use getCustomerStats(name) to derive them from MOCK_ORDERS at render time,
-  // so the list columns and the detail dialog can never disagree.
+  // Use getCustomerStats(customer.id) to derive them from MOCK_ORDERS at
+  // render time, so the list columns and the detail dialog can never disagree.
 }
 
 export const MOCK_CUSTOMERS: CustomerRecord[] = [
@@ -101,17 +101,18 @@ export const MOCK_CUSTOMERS: CustomerRecord[] = [
 // getCustomerStats
 //
 // Derives totalOrders and totalSpend for a customer by matching against
-// MOCK_ORDERS on customerName (string equality).
+// MOCK_ORDERS on customerId (FK, not name string).
 //
-// Limitation: two customers with the same name would collide.
-// TODO: PROV-FR-CUST-03 — replace name-string match with customer ID FK
-// when backend exists.
+// Orders with customerId: null (POS-created, unlinked orders) are excluded
+// — they will not appear in any customer's stats until backend linking exists.
+// TODO: DEBT-004 — when NewOrderForm gains customer selection, newly placed
+// orders will populate customerId and appear here automatically.
 // ---------------------------------------------------------------------------
-export function getCustomerStats(customerName: string): {
+export function getCustomerStats(customerId: string): {
   totalOrders: number
   totalSpend: number
 } {
-  const matched = MOCK_ORDERS.filter((o) => o.customerName === customerName)
+  const matched = MOCK_ORDERS.filter((o) => o.customerId === customerId)
   return {
     totalOrders: matched.length,
     totalSpend: matched.reduce((sum, o) => sum + o.total, 0),

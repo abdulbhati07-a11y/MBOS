@@ -153,7 +153,7 @@ export default function CustomersPage() {
           id: "totalOrders",
           header: "Orders",
           cell: ({ row }) => {
-            const { totalOrders } = getCustomerStats(row.original.name)
+            const { totalOrders } = getCustomerStats(row.original.id)
             return totalOrders
           },
         },
@@ -161,7 +161,7 @@ export default function CustomersPage() {
           id: "totalSpend",
           header: "Total Spend",
           cell: ({ row }) => {
-            const { totalSpend } = getCustomerStats(row.original.name)
+            const { totalSpend } = getCustomerStats(row.original.id)
             return `$${totalSpend.toFixed(2)}`
           },
         },

@@ -47,14 +47,11 @@ export function CustomerDetailDialog({
 }: CustomerDetailDialogProps) {
   if (!customer) return null
 
-  // TODO: PROV-FR-CUST-03 — replace name-string match with customer ID FK
-  // when backend exists. Two customers with the same name would collide here.
-  //
-  // Single filter — both the table rows and the summary numbers derive from
-  // this one array so they are structurally guaranteed to agree.
-  // getCustomerStats is NOT called here; totals are computed directly from
-  // `orders` so there is no second, independent filter anywhere in this component.
-  const orders = MOCK_ORDERS.filter((o) => o.customerName === customer.name)
+  // Filter by customerId (FK) — structurally correct and collision-safe.
+  // Orders with customerId: null (unlinked POS orders) are correctly excluded.
+  // Single filter: both table rows and summary totals derive from this one
+  // array so they are structurally guaranteed to agree.
+  const orders = MOCK_ORDERS.filter((o) => o.customerId === customer.id)
   const totalOrders = orders.length
   const totalSpend = orders.reduce((sum, o) => sum + o.total, 0)
 

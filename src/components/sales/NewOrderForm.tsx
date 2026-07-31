@@ -123,6 +123,9 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
       orderNumber: `#${Math.floor(1000 + Math.random() * 9000)}`,
       date: new Date().toISOString(),
       customerName: data.customerName?.trim() || "Walk-in",
+      // customerId is null for POS-created orders until Sales↔Customers
+      // linking is built in the backend integration phase. (DEBT-004)
+      customerId: null,
       paymentMethod: data.paymentMethod as PaymentMethod,
       status: "Pending",
       taxRate: data.taxRate || 0,

@@ -1,6 +1,13 @@
 // ---------------------------------------------------------------------------
 // Mock Orders — Single source of truth for the Sales / POS module.
 // All currency values are stored as numbers; display via .toFixed(2).
+//
+// customerId: matches CustomerRecord.id from MOCK_CUSTOMERS for seed orders.
+// Orders created via the POS (NewOrderForm) have customerId: null until the
+// Sales↔Customers linking is built in the backend integration phase.
+// TODO: DEBT-004 — NewOrderForm must be updated to accept a CustomerRecord
+// selection and populate customerId when the backend and customer-linking
+// feature are built. See DOCUMENTATION_DEBT.md.
 // ---------------------------------------------------------------------------
 
 export type OrderStatus = "Pending" | "Completed" | "Refunded"
@@ -18,7 +25,8 @@ export type OrderRecord = {
   id: string
   orderNumber: string
   date: string // ISO date string
-  customerName: string
+  customerName: string  // display name, always present
+  customerId: string | null  // FK to CustomerRecord.id; null for unlinked POS orders
   paymentMethod: PaymentMethod
   status: OrderStatus
   taxRate: number // percentage, e.g. 8 = 8%
@@ -34,6 +42,7 @@ export const MOCK_ORDERS: OrderRecord[] = [
     orderNumber: "#1001",
     date: "2026-07-28T09:15:00Z",
     customerName: "Walk-in",
+    customerId: "cust-003",
     paymentMethod: "Cash",
     status: "Completed",
     taxRate: 0,
@@ -50,6 +59,7 @@ export const MOCK_ORDERS: OrderRecord[] = [
     orderNumber: "#1002",
     date: "2026-07-29T11:30:00Z",
     customerName: "Ahmed K.",
+    customerId: "cust-001",
     paymentMethod: "Card",
     status: "Completed",
     taxRate: 8,
@@ -65,6 +75,7 @@ export const MOCK_ORDERS: OrderRecord[] = [
     orderNumber: "#1003",
     date: "2026-07-29T14:45:00Z",
     customerName: "Walk-in",
+    customerId: "cust-003",
     paymentMethod: "Mobile",
     status: "Refunded",
     taxRate: 0,
@@ -80,6 +91,7 @@ export const MOCK_ORDERS: OrderRecord[] = [
     orderNumber: "#1004",
     date: "2026-07-30T08:00:00Z",
     customerName: "Sara M.",
+    customerId: "cust-002",
     paymentMethod: "Cash",
     status: "Pending",
     taxRate: 5,
@@ -97,6 +109,7 @@ export const MOCK_ORDERS: OrderRecord[] = [
     orderNumber: "#1005",
     date: "2026-07-31T10:20:00Z",
     customerName: "Walk-in",
+    customerId: "cust-003",
     paymentMethod: "Card",
     status: "Completed",
     taxRate: 0,
