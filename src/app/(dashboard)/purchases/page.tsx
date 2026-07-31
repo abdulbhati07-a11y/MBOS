@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { ColumnDef } from "@tanstack/react-table"
-import { Plus, Eye, Edit, UserX, UserCheck, ArrowRight } from "lucide-react"
+import { Plus, Eye, Edit, UserX, UserCheck, ArrowRight, Lock } from "lucide-react"
 
 import { PageHeader } from "@/components/shared/PageHeader"
 import { DataTable } from "@/components/shared/DataTable"
@@ -11,8 +11,9 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { EmptyState } from "@/components/shared/EmptyState"
 import { useBreadcrumb } from "@/contexts/breadcrumb-context"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { useCanPerform } from "@/contexts/role-context"
+import { Modules, Actions } from "@/config/permissions"
 
 import { SupplierDrawer } from "@/components/purchases/SupplierDrawer"
 import { PODetailDialog } from "@/components/purchases/PODetailDialog"
@@ -29,7 +30,6 @@ import {
   PO_TRANSITIONS,
 } from "@/lib/mock-data/purchase-orders"
 import { SupplierValues } from "@/lib/validation/purchases"
-import { Lock } from "lucide-react"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -67,10 +67,8 @@ export default function PurchasesPage() {
     PURCHASES_CRUMBS as unknown as { label: string; href?: string }[]
   )
 
-  // [PROV-PERM-04] Persona Mocking Toggle
-  // TODO: remove once real auth/permissions context exists
-  const [role, setRole] = React.useState<"Manager" | "Cashier">("Manager")
-  const canAccess = role === "Manager"
+  // [PROV-PERM-04] Permission via RoleContext
+  const canAccess = useCanPerform(Modules.PURCHASES, Actions.READ)
 
   const [activeTab, setActiveTab] = React.useState("suppliers")
 
@@ -378,18 +376,6 @@ export default function PurchasesPage() {
         />
 
         <div className="flex items-center gap-4">
-          {/* TODO: remove once real auth/permissions context exists */}
-          <div className="flex items-center gap-2 bg-muted p-2 rounded-md">
-            <span className="text-xs text-muted-foreground">Cashier</span>
-            <Switch
-              checked={role === "Manager"}
-              onCheckedChange={(checked) =>
-                setRole(checked ? "Manager" : "Cashier")
-              }
-            />
-            <span className="text-xs text-muted-foreground">Manager</span>
-          </div>
-
           {canAccess && activeTab === "suppliers" && (
             <Button onClick={handleAddSupplier}>
               <Plus className="mr-2 h-4 w-4" />

@@ -99,6 +99,25 @@ Current state: `PurchaseOrderRecord.supplierName` is a stored string, so deactiv
 
 ---
 
+### DEBT-006 — RoleProvider is frontend-only, not backed by auth/session
+
+**Where it needs to land:** Section 6 (API Design) and Section 7 (Auth/Session)
+
+**What needs to be written:** The mechanism for deriving the current user's `Role` from the JWT/session token and injecting it into `RoleProvider` as `initialRole`. The context shape (`Role`, `canPerform(module, action)`) is already designed for this swap — consumers call `useCanPerform` and require no changes when the backing source changes from React state to real auth.
+
+**Current state:** `RoleProvider` holds role in `React.useState`, defaulting to `"Manager"`. The AppShell header exposes a role-switcher dropdown for demo purposes. This is the correct shape but not real auth.
+
+**What to do at Section 6/7 time:**
+1. Remove the role-switcher dropdown from `AppShell` header
+2. Pass the JWT-derived role into `RoleProvider` as `initialRole` (or connect it via a session context)
+3. Remove the `setRole` export from `role-context.tsx` (no longer needed once role is read-only from auth)
+
+**Source:** `src/contexts/role-context.tsx` — DEBT-006 comment. `src/components/shared/AppShell.tsx` — role switcher TODO comment. Introduced in Step 9.
+
+**Status:** Open
+
+---
+
 ## Resolved Items
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*

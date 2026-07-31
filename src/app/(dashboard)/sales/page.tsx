@@ -9,8 +9,9 @@ import { DataTable } from "@/components/shared/DataTable"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { useBreadcrumb } from "@/contexts/breadcrumb-context"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { useCanPerform } from "@/contexts/role-context"
+import { Modules, Actions } from "@/config/permissions"
 
 import { OrderDetailDialog } from "@/components/sales/OrderDetailDialog"
 import { NewOrderForm } from "@/components/sales/NewOrderForm"
@@ -35,10 +36,7 @@ const PAGE_SIZE = 10
 export default function SalesPage() {
   useBreadcrumb("Sales", SALES_CRUMBS as unknown as { label: string; href?: string }[])
 
-  // [PROV-PERM-02] Persona Mocking Toggle
-  // TODO: remove once real auth/permissions context exists
-  const [role, setRole] = React.useState<"Manager" | "Cashier">("Manager")
-  const canRefund = role === "Manager"
+  const canRefund = useCanPerform(Modules.SALES, Actions.REFUND)
 
   // Order History state
   const [orders, setOrders] = React.useState<OrderRecord[]>(MOCK_ORDERS)
@@ -163,22 +161,10 @@ export default function SalesPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-        <PageHeader
-          title="Sales / POS"
-          description="Process orders and view sales history"
-        />
-
-        {/* TODO: remove once real auth/permissions context exists */}
-        <div className="flex items-center gap-2 bg-muted p-2 rounded-md self-start">
-          <span className="text-xs text-muted-foreground">Cashier</span>
-          <Switch
-            checked={role === "Manager"}
-            onCheckedChange={(checked) => setRole(checked ? "Manager" : "Cashier")}
-          />
-          <span className="text-xs text-muted-foreground">Manager</span>
-        </div>
-      </div>
+      <PageHeader
+        title="Sales / POS"
+        description="Process orders and view sales history"
+      />
 
       {/* ── Tabs ── */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>

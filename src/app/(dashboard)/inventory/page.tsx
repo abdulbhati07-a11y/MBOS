@@ -20,7 +20,8 @@ import {
 import { ProductDrawer } from "@/components/inventory/ProductDrawer"
 import { StockAdjustmentDialog } from "@/components/inventory/StockAdjustmentDialog"
 import { ProductValues } from "@/lib/validation/inventory"
-import { Switch } from "@/components/ui/switch"
+import { useCanPerform } from "@/contexts/role-context"
+import { Modules, Actions } from "@/config/permissions"
 
 import { MOCK_PRODUCTS, type ProductRecord } from "@/lib/mock-data/products"
 
@@ -29,10 +30,7 @@ const INVENTORY_CRUMBS = [{ label: "Inventory" }] as const
 export default function InventoryPage() {
   useBreadcrumb("Inventory", INVENTORY_CRUMBS as unknown as { label: string; href?: string }[])
 
-  // [PROV-PERM-01] Persona Mocking Toggle
-  // TODO: remove once real auth/permissions context exists
-  const [role, setRole] = React.useState<"Manager" | "Cashier">("Manager")
-  const canEdit = role === "Manager"
+  const canWrite = useCanPerform(Modules.INVENTORY, Actions.WRITE)
 
   // Drawer / Dialog State
   const [drawerOpen, setDrawerOpen] = React.useState(false)
@@ -66,8 +64,7 @@ export default function InventoryPage() {
   }
 
   const columns = React.useMemo<ColumnDef<ProductRecord>[]>(() => {
-    const cols: ColumnDef<ProductRecord>[] = [
-      {
+    const cols: ColumnDef<ProductRecord>[] = [      {
         accessorKey: "name",
         header: "Product",
         cell: ({ row }) => {
@@ -124,8 +121,8 @@ export default function InventoryPage() {
       },
     ]
 
-    // Only add Actions column if the user has Manager permissions
-    if (canEdit) {
+    // Only add Actions column if the user can write inventory
+    if (canWrite) {
       cols.push({
         id: "actions",
         cell: ({ row }) => {
@@ -154,7 +151,7 @@ export default function InventoryPage() {
     }
 
     return cols
-  }, [canEdit])
+  }, [canWrite])
 
   return (
     <div className="flex flex-col gap-6">
@@ -163,19 +160,9 @@ export default function InventoryPage() {
           title="Inventory"
           description="Manage your product catalog and stock levels"
         />
-        
-        <div className="flex items-center gap-4">
-          {/* TODO: remove once real auth/permissions context exists */}
-          <div className="flex items-center gap-2 bg-muted p-2 rounded-md">
-            <span className="text-xs text-muted-foreground">Cashier</span>
-            <Switch 
-              checked={role === "Manager"}
-              onCheckedChange={(c) => setRole(c ? "Manager" : "Cashier")}
-            />
-            <span className="text-xs text-muted-foreground">Manager</span>
-          </div>
 
-          {canEdit && (
+        <div className="flex items-center gap-4">
+          {canWrite && (
             <Button onClick={handleCreateProduct}>
               <Plus className="mr-2 h-4 w-4" />
               Add Product

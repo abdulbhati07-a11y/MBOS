@@ -10,7 +10,8 @@ import { StatusBadge } from "@/components/shared/StatusBadge"
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { useBreadcrumb } from "@/contexts/breadcrumb-context"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
+import { useCanPerform } from "@/contexts/role-context"
+import { Modules, Actions } from "@/config/permissions"
 
 import { CustomerDrawer } from "@/components/customers/CustomerDrawer"
 import { CustomerDetailDialog } from "@/components/customers/CustomerDetailDialog"
@@ -39,10 +40,8 @@ export default function CustomersPage() {
     CUSTOMERS_CRUMBS as unknown as { label: string; href?: string }[]
   )
 
-  // [PROV-PERM-03] Persona Mocking Toggle
-  // TODO: remove once real auth/permissions context exists
-  const [role, setRole] = React.useState<"Manager" | "Cashier">("Manager")
-  const canManage = role === "Manager"
+  // [PROV-PERM-03] Permission via RoleContext
+  const canManage = useCanPerform(Modules.CUSTOMERS, Actions.WRITE)
 
   // Customer list state — starts from seed data, mutations are in-memory only
   const [customers, setCustomers] = React.useState<CustomerRecord[]>(MOCK_CUSTOMERS)
@@ -251,18 +250,6 @@ export default function CustomersPage() {
         />
 
         <div className="flex items-center gap-4">
-          {/* TODO: remove once real auth/permissions context exists */}
-          <div className="flex items-center gap-2 bg-muted p-2 rounded-md">
-            <span className="text-xs text-muted-foreground">Cashier</span>
-            <Switch
-              checked={role === "Manager"}
-              onCheckedChange={(checked) =>
-                setRole(checked ? "Manager" : "Cashier")
-              }
-            />
-            <span className="text-xs text-muted-foreground">Manager</span>
-          </div>
-
           {canManage && (
             <Button onClick={handleAddCustomer}>
               <Plus className="mr-2 h-4 w-4" />
