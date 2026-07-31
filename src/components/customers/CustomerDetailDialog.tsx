@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CustomerRecord, getCustomerStats } from "@/lib/mock-data/customers"
+import { CustomerRecord } from "@/lib/mock-data/customers"
 import { MOCK_ORDERS, OrderStatus } from "@/lib/mock-data/orders"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { EmptyState } from "@/components/shared/EmptyState"
@@ -49,8 +49,14 @@ export function CustomerDetailDialog({
 
   // TODO: PROV-FR-CUST-03 — replace name-string match with customer ID FK
   // when backend exists. Two customers with the same name would collide here.
+  //
+  // Single filter — both the table rows and the summary numbers derive from
+  // this one array so they are structurally guaranteed to agree.
+  // getCustomerStats is NOT called here; totals are computed directly from
+  // `orders` so there is no second, independent filter anywhere in this component.
   const orders = MOCK_ORDERS.filter((o) => o.customerName === customer.name)
-  const { totalOrders, totalSpend } = getCustomerStats(customer.name)
+  const totalOrders = orders.length
+  const totalSpend = orders.reduce((sum, o) => sum + o.total, 0)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
