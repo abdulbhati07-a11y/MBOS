@@ -18,6 +18,11 @@ export type POStatus = "Draft" | "Sent" | "Received" | "Cancelled"
 //                  Received  → (terminal)
 //                  Cancelled → (terminal)
 // The UI derives available actions from this map — no hardcoded conditionals.
+//
+// TODO: PROV-FR-PUR-05 — the eventual PO API (Section 6/9) MUST re-validate
+// these same transitions server-side. This map is a UX affordance only;
+// client-side enforcement is not a data-integrity guarantee. A caller hitting
+// the API directly could skip Draft → Received without going through Sent.
 // ---------------------------------------------------------------------------
 export const PO_TRANSITIONS: Record<POStatus, POStatus[]> = {
   Draft:     ["Sent", "Cancelled"],

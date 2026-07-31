@@ -332,22 +332,30 @@ export default function PurchasesPage() {
                 <Eye className="h-4 w-4 mr-1" />
                 View
               </Button>
-              {nextStatuses.map((next) => (
-                <Button
-                  key={next}
-                  variant={next === "Cancelled" ? "outline" : "outline"}
-                  size="sm"
-                  className={
-                    next === "Cancelled"
-                      ? "text-destructive border-destructive/40 hover:bg-destructive/10"
-                      : ""
-                  }
-                  onClick={() => handleTransition(po.id, next)}
-                >
-                  <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                  {TRANSITION_LABELS[next]}
-                </Button>
-              ))}
+              {nextStatuses.length === 0 ? (
+                // Terminal state — no further transitions available.
+                // Rendered explicitly so the column doesn't appear incomplete.
+                <span className="text-xs text-muted-foreground italic px-1">
+                  {po.status === "Received" ? "Fulfilled" : "Closed"}
+                </span>
+              ) : (
+                nextStatuses.map((next) => (
+                  <Button
+                    key={next}
+                    variant="outline"
+                    size="sm"
+                    className={
+                      next === "Cancelled"
+                        ? "text-destructive border-destructive/40 hover:bg-destructive/10"
+                        : ""
+                    }
+                    onClick={() => handleTransition(po.id, next)}
+                  >
+                    <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                    {TRANSITION_LABELS[next]}
+                  </Button>
+                ))
+              )}
             </div>
           )
         },

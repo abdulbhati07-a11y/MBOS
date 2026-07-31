@@ -36,6 +36,13 @@ interface PODetailDialogProps {
 export function PODetailDialog({ open, onOpenChange, po }: PODetailDialogProps) {
   if (!po) return null
 
+  // supplierName is stored as a plain string on the PO record and rendered
+  // as text here. It is NOT passed through a supplier select or filtered by
+  // isActive — so deactivating a supplier after a PO is created does not
+  // affect how that PO's supplier name displays. A future edit-PO feature
+  // must preserve this behaviour: show the stored name regardless of the
+  // supplier's current active status, or risk silently losing it.
+
   const formattedDate = new Date(po.date).toLocaleString("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
