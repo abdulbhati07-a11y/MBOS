@@ -87,16 +87,19 @@ function AppShellHeader() {
       </div>
 
       <div className="flex items-center gap-4">
-        {/* Tenant Switcher Stub — unchanged, not in scope for Step 9 */}
+        {/* Branch Switcher stub — renamed from "Tenant Switcher" per Section 5
+            decision: one user belongs to one tenant; this control selects among
+            branches within the same tenant. Real implementation pending Branch
+            data model (Section 5 / FR-TEN-02). */}
         <DropdownMenu>
           <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="hidden sm:flex" />}>
-            Acme Corp
+            Main Branch
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Tenants</DropdownMenuLabel>
+            <DropdownMenuLabel>Branches</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Acme Corp (Active)</DropdownMenuItem>
-            <DropdownMenuItem>Global Industries</DropdownMenuItem>
+            <DropdownMenuItem>Main Branch (Active)</DropdownMenuItem>
+            <DropdownMenuItem>Warehouse Branch</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
