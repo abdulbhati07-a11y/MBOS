@@ -38,6 +38,7 @@ interface StockAdjustmentDialogProps {
   onOpenChange: (open: boolean) => void
   productName: string
   currentStock: number
+  onConfirm?: (data: StockAdjustmentValues) => void
 }
 
 export function StockAdjustmentDialog({
@@ -45,6 +46,7 @@ export function StockAdjustmentDialog({
   onOpenChange,
   productName,
   currentStock,
+  onConfirm,
 }: StockAdjustmentDialogProps) {
   const form = useForm<StockAdjustmentValues>({
     // as any: known zodResolver + z.coerce interop gap, not a real type error
@@ -79,6 +81,7 @@ export function StockAdjustmentDialog({
     }
 
     console.log("Adjust Stock:", { product: productName, ...data })
+    onConfirm?.(data)
     onOpenChange(false)
   }
 

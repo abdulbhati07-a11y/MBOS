@@ -4,12 +4,12 @@
 // src/hooks/use-dashboard-metrics.ts
 //
 // Single source of truth for all dashboard-displayed numbers.
-// No dashboard widget reads MOCK_ORDERS, MOCK_CUSTOMERS, MOCK_SUPPLIERS, or
-// MOCK_PURCHASE_ORDERS directly — all derivations happen here.
+// No dashboard widget reads mock data arrays directly — all derivations
+// happen here.
 //
-// Low-stock / Inventory metrics are intentionally absent: the Inventory module
-// is not confirmed in this track yet.
-// TODO: add lowStockCount once Inventory integration is confirmed.
+// Products are received as a parameter (from ProductsContext) so the
+// dashboard reflects live inventory state, not the static MOCK_PRODUCTS
+// constant.
 // ---------------------------------------------------------------------------
 
 import { useMemo } from "react"
@@ -17,6 +17,8 @@ import { MOCK_ORDERS, OrderRecord } from "@/lib/mock-data/orders"
 import { MOCK_CUSTOMERS } from "@/lib/mock-data/customers"
 import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
 import { MOCK_PURCHASE_ORDERS, PO_TRANSITIONS, POStatus } from "@/lib/mock-data/purchase-orders"
+import { ProductRecord } from "@/lib/mock-data/products"
+import { useProducts } from "@/contexts/products-context"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,10 +34,6 @@ export type RecentOrderRow = {
   id: string
   orderNumber: string
   date: string
-  // customerName is always the display string stored on the order.
-  // customerId may be null for POS-created orders not yet linked to a
-  // CustomerRecord. The hook never crashes on null — it passes through
-  // customerName as-is regardless of whether customerId is present.
   customerName: string
   customerId: string | null
   total: number
@@ -45,7 +43,7 @@ export type RecentOrderRow = {
 export type DashboardMetrics = {
   // Widget 1 — Open Purchase Orders by status
   poStatusBreakdown: POStatusBreakdown[]
-  openPOCount: number          // sum of non-terminal statuses
+  openPOCount: number
 
   // Widget 2 — Suppliers
   activeSupplierCount: number
@@ -53,12 +51,17 @@ export type DashboardMetrics = {
 
   // Widget 3 — Sales / Orders
   totalOrderCount: number
-  totalOrderValue: number      // sum of all order totals
-  recentOrders: RecentOrderRow[] // 5 most recent by date
+  totalOrderValue: number
+  recentOrders: RecentOrderRow[]
 
   // Widget 4 — Customers
   activeCustomerCount: number
   totalCustomerCount: number
+
+  // Widget 5 — Inventory health (live from ProductsContext)
+  totalProductCount: number
+  lowStockCount: number     // stock > 0 && stock <= reorderPoint
+  outOfStockCount: number   // stock === 0
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +69,9 @@ export type DashboardMetrics = {
 // ---------------------------------------------------------------------------
 
 export function useDashboardMetrics(): DashboardMetrics {
+  // Live products from shared context — reflects Inventory adjustments
+  const products = useProducts()
+
   return useMemo(() => {
 
     // ── Widget 1: Purchase Orders ──────────────────────────────────────────
@@ -87,7 +93,6 @@ export function useDashboardMetrics(): DashboardMetrics {
     const totalOrderCount = MOCK_ORDERS.length
     const totalOrderValue = MOCK_ORDERS.reduce((sum, o) => sum + o.total, 0)
 
-    // 5 most recent orders by date descending
     const recentOrders: RecentOrderRow[] = [...MOCK_ORDERS]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 5)
@@ -95,8 +100,8 @@ export function useDashboardMetrics(): DashboardMetrics {
         id: o.id,
         orderNumber: o.orderNumber,
         date: o.date,
-        customerName: o.customerName,   // always present — safe display fallback
-        customerId: o.customerId,        // may be null; widgets handle gracefully
+        customerName: o.customerName,
+        customerId: o.customerId,
         total: o.total,
         status: o.status,
       }))
@@ -104,6 +109,15 @@ export function useDashboardMetrics(): DashboardMetrics {
     // ── Widget 4: Customers ────────────────────────────────────────────────
     const activeCustomerCount = MOCK_CUSTOMERS.filter((c) => c.isActive).length
     const totalCustomerCount = MOCK_CUSTOMERS.length
+
+    // ── Widget 5: Inventory health ─────────────────────────────────────────
+    // Derived from live ProductsContext — matches the StatusBadge categories
+    // already used in the Inventory page (In Stock / Low Stock / Out of Stock)
+    const totalProductCount = products.length
+    const lowStockCount = products.filter(
+      (p) => p.stock > 0 && p.stock <= p.reorderPoint
+    ).length
+    const outOfStockCount = products.filter((p) => p.stock === 0).length
 
     return {
       poStatusBreakdown,
@@ -115,11 +129,9 @@ export function useDashboardMetrics(): DashboardMetrics {
       recentOrders,
       activeCustomerCount,
       totalCustomerCount,
+      totalProductCount,
+      lowStockCount,
+      outOfStockCount,
     }
-  }, [
-    // Dependencies are the imported module-level constants. They don't change
-    // at runtime (mock data), but listing them explicitly makes this correct
-    // when real API calls replace these imports later.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ])
+  }, [products]) // re-derives when live product state changes
 }

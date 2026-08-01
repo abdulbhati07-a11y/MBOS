@@ -12,6 +12,7 @@ import {
   Plus,
   Truck,
   Building2,
+  AlertTriangle,
 } from "lucide-react"
 
 import { PageHeader } from "@/components/shared/PageHeader"
@@ -24,7 +25,6 @@ import { Button } from "@/components/ui/button"
 import { useDashboardMetrics, RecentOrderRow } from "@/hooks/use-dashboard-metrics"
 import { OrderStatus } from "@/lib/mock-data/orders"
 import { POStatus } from "@/lib/mock-data/purchase-orders"
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -125,6 +125,9 @@ export default function DashboardPage() {
     recentOrders,
     activeCustomerCount,
     totalCustomerCount,
+    totalProductCount,
+    lowStockCount,
+    outOfStockCount,
   } = useDashboardMetrics()
 
   return (
@@ -135,7 +138,7 @@ export default function DashboardPage() {
       />
 
       {/* ── KPI Metric Cards ── */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
 
         {/* Widget 1 — Open Purchase Orders */}
         <Card>
@@ -209,6 +212,39 @@ export default function DashboardPage() {
             <p className="text-xs text-muted-foreground mt-1">
               of {totalCustomerCount} total customer{totalCustomerCount !== 1 ? "s" : ""}
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Widget 5 — Inventory Health (live from ProductsContext) */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Inventory Health
+            </CardTitle>
+            <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{totalProductCount}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              product{totalProductCount !== 1 ? "s" : ""}
+            </p>
+            {(lowStockCount > 0 || outOfStockCount > 0) && (
+              <div className="mt-2 flex flex-col gap-0.5">
+                {outOfStockCount > 0 && (
+                  <span className="text-xs text-destructive font-medium">
+                    {outOfStockCount} out of stock
+                  </span>
+                )}
+                {lowStockCount > 0 && (
+                  <span className="text-xs text-warning font-medium">
+                    {lowStockCount} low stock
+                  </span>
+                )}
+              </div>
+            )}
+            {lowStockCount === 0 && outOfStockCount === 0 && (
+              <p className="text-xs text-success mt-1">All items in stock</p>
+            )}
           </CardContent>
         </Card>
       </div>

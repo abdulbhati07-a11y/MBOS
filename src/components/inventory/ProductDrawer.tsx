@@ -29,9 +29,10 @@ interface ProductDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   product?: ProductValues // undefined means "Create", defined means "Edit"
+  onSave?: (data: ProductValues) => void
 }
 
-export function ProductDrawer({ open, onOpenChange, product }: ProductDrawerProps) {
+export function ProductDrawer({ open, onOpenChange, product, onSave }: ProductDrawerProps) {
   const isEdit = !!product
 
   const form = useForm<ProductValues>({
@@ -72,7 +73,7 @@ export function ProductDrawer({ open, onOpenChange, product }: ProductDrawerProp
 
   const onSubmit = (data: ProductValues) => {
     console.log(isEdit ? "Update Product:" : "Create Product:", data)
-    // PROV-FR-INV-02: Simulate save
+    onSave?.(data)
     onOpenChange(false)
   }
 

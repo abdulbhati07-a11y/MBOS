@@ -4,7 +4,7 @@ import * as React from "react"
 import { useForm, useFieldArray } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { newOrderSchema, NewOrderValues } from "@/lib/validation/sales"
-import { MOCK_PRODUCTS, ProductRecord } from "@/lib/mock-data/products"
+import { useProducts } from "@/contexts/products-context"
 import { OrderRecord, OrderLineRecord, PaymentMethod } from "@/lib/mock-data/orders"
 
 import { Button } from "@/components/ui/button"
@@ -39,6 +39,7 @@ interface NewOrderFormProps {
 }
 
 export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
+  const products = useProducts()
   const [selectedProductId, setSelectedProductId] = React.useState<string>("")
 
   const form = useForm<NewOrderValues>({
@@ -73,7 +74,7 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
   // ---------------------------------------------------------------------------
   const handleAddProduct = () => {
     if (!selectedProductId) return
-    const product = MOCK_PRODUCTS.find((p) => p.id === selectedProductId)
+    const product = products.find((p) => p.id === selectedProductId)
     if (!product) return
 
     // If the product already exists in lines, just bump the quantity
@@ -158,7 +159,7 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
                 <SelectValue placeholder="Search and select a product…" />
               </SelectTrigger>
               <SelectContent>
-                {MOCK_PRODUCTS.map((p) => (
+                {products.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name} — ${p.price.toFixed(2)}
                     {p.stock === 0 && " (Out of stock)"}
@@ -198,10 +199,10 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
               <TableBody>
                 {fields.map((field, index) => {
                   const line = watchedLines[index]
-                  const product = MOCK_PRODUCTS.find((p) => p.id === field.productId)
-                  // [PROV-BR-07]: warn if quantity exceeds static snapshot stock.
-                  // Limitation: cumulative depletion across orders is not tracked.
-                  // Comparison is always against the original MOCK_PRODUCTS snapshot.
+                  const product = products.find((p) => p.id === field.productId)
+                  // [PROV-BR-07]: warn if quantity exceeds current live stock.
+                  // Stock is read from shared ProductsContext — reflects any
+                  // adjustments made in Inventory during the same session.
                   const isOverStock = product !== undefined && (line?.quantity ?? 0) > product.stock
 
                   return (
