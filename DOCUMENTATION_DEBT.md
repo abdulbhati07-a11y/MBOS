@@ -148,6 +148,48 @@ None of these are UI-only changes. The permission matrix UI built in Step 10 is 
 
 ---
 
-## Resolved Items
+### DEBT-009 — Reports export (PDF/CSV) not implemented
+
+**Where it needs to land:** Section 2 FR-REP-03 (exportable reports)
+
+**What needs to be written:** Export format requirements, what data each report exports, and whether export is server-side rendered (PDF generation) or client-side (CSV serialisation). A library decision is also needed (e.g., `react-pdf`, `papaparse` for CSV, or a backend-generated export endpoint).
+
+**Current state:** No export library is wired. Export actions are not present in the Reports UI. The tab layout and data are all in place — adding export is additive once a library is chosen.
+
+**Source:** `src/app/(dashboard)/reports/page.tsx` — FR-REP-03 comment. Introduced in Step 12.
+
+**Status:** Open — deferred until export library and format requirements are decided
+
+---
+
+### DEBT-010 — Customer/Supplier ledger requires backend financial data model
+
+**Where it needs to land:** Section 8 (Customers module spec) and Section 9 (Purchases/Suppliers module spec), plus Section 6 (API Design — financial ledger schema)
+
+**What needs to be written:** The financial ledger concept: invoice records, payment records, outstanding balances, credit terms, aging buckets. None of these fields exist on `CustomerRecord` or `SupplierRecord`. The Reports "Customer & Supplier Activity" tab shows spend summaries (total orders, total PO value) — this is the maximum achievable from current data without fabricating fields.
+
+A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the backend schema, linked to Customer/Supplier by FK. The frontend reports can then be extended once these exist.
+
+**Source:** `src/app/(dashboard)/reports/page.tsx` — ActivityTab disclaimer note. `src/lib/mock-data/customers.ts` and `src/lib/mock-data/suppliers.ts` — absence of balance/invoice fields. Identified during Step 12 data availability review.
+
+**Status:** Open — blocked on backend financial data model design
+
+---
+
+### DEBT-011 — MOCK_ORDERS is static; session-placed orders not reflected in Reports/Dashboard
+
+**Where it needs to land:** Section 6 (API Design — orders endpoint) and the frontend `use-dashboard-metrics` hook and Reports page
+
+**What needs to be written:** An `OrdersContext` analogous to `ProductsContext` (Step 11) should hold the live orders array and be written to by `SalesPage` when `NewOrderForm` places an order. Currently, `SalesPage` holds orders in local `useState` — orders placed during a session are invisible to Reports, Dashboard's Recent Orders widget, and `getCustomerStats`.
+
+**Impact today:** Reports Sales Summary and Dashboard Recent Orders both show only the 5 seed orders. An order placed via the POS during a session disappears from both views if the user navigates away from Sales.
+
+**Fix:** Same pattern as `ProductsContext` — lift `MOCK_ORDERS` into `OrdersContext`, wrap the dashboard layout, wire `SalesPage` to write new orders to it, wire Reports and `use-dashboard-metrics` to read from it.
+
+**Source:** `src/app/(dashboard)/reports/page.tsx` — DEBT-011 comment. `src/hooks/use-dashboard-metrics.ts` — reads `MOCK_ORDERS` directly. `src/app/(dashboard)/sales/page.tsx` — local `useState` for orders. Identified during Step 12 data availability review.
+
+**Status:** Open — medium priority; same fix pattern as Step 11 (ProductsContext)
+
+---
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
