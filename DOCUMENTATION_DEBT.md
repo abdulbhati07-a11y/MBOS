@@ -188,7 +188,7 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 **Source:** `src/app/(dashboard)/reports/page.tsx` — DEBT-011 comment. `src/hooks/use-dashboard-metrics.ts` — reads `MOCK_ORDERS` directly. `src/app/(dashboard)/sales/page.tsx` — local `useState` for orders. Identified during Step 12 data availability review.
 
-**Status:** Resolved — OrdersContext added in step-12-close amendment; SalesPage, use-dashboard-metrics, and Reports all read from live shared state
+**Status:** Resolved — OrdersContext added; SalesPage, use-dashboard-metrics, Reports, customers/page.tsx, and CustomerDetailDialog all read from live shared state. getCustomerStats() removed entirely (was the last static MOCK_ORDERS consumer outside mock-data/). Commits d92e4c3 and e44a911.
 
 ---
 
