@@ -192,4 +192,22 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 ---
 
+### DEBT-012 — Frontend mock data uses float monetary values; backend must store as integer cents
+
+**Where it needs to land:** Section 4.6 (Financial Calculation Rules), Section 5 (ERD — all monetary columns must be `INTEGER` not `DECIMAL`/`FLOAT`), Section 6 (API Design — all monetary fields in request/response bodies must be integers in cents)
+
+**What needs to be written:** The architectural rule that all monetary values are stored as integers (cents/minor currency units) in the database and transmitted as integers in the API. The frontend's `toFixed(2)` display pattern is correct for presentation but is currently applied to JavaScript float values (e.g. `29.99`), not to integers divided by 100.
+
+**Current state:** Every monetary field in the frontend mock data (`price`, `cost`, `total`, `subtotal`, `taxAmount`, `unitPrice`, `unitCost`, `lineTotal`) is a JavaScript `number` typed as a float. When the real API is connected, all these values must become integers in cents (`price: 2999`, `taxAmount: 425`), and the presentation layer must divide by 100 before calling `toFixed(2)`.
+
+**Impact:** All mock-data files will need updating at API integration time. All `toFixed(2)` call sites must change to `(value / 100).toFixed(2)`. Systematic, mechanical — not a design decision — but touches every monetary display in every module.
+
+**Source:** `src/lib/mock-data/orders.ts`, `src/lib/mock-data/products.ts`, `src/lib/mock-data/purchase-orders.ts` — all monetary fields. NFR-14 (fixed-point arithmetic requirement). Identified during Section 4 documentation review.
+
+**Status:** Open — deferred to backend integration phase
+
+---
+
+## Resolved Items
+
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
