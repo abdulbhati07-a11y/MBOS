@@ -18,26 +18,22 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 import {
-  MOCK_ORDERS,
   OrderRecord,
   OrderStatus,
   PaymentMethod,
 } from "@/lib/mock-data/orders"
-// DEBT-011: MOCK_ORDERS is the static seed array, not a shared live context.
-// Orders placed during a session (via Sales/POS) are NOT reflected here until
-// an OrdersContext analogous to ProductsContext is built.
-// Reports show seed data only until that is resolved.
+// DEBT-011 resolved: orders now read from OrdersContext (live shared state).
+// Session-placed orders are immediately visible in Reports.
 
 import {
   MOCK_CUSTOMERS,
-  getCustomerStats,
 } from "@/lib/mock-data/customers"
 import {
   MOCK_PURCHASE_ORDERS,
 } from "@/lib/mock-data/purchase-orders"
 import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
 import { ProductRecord } from "@/lib/mock-data/products"
-
+import { useOrders } from "@/contexts/orders-context"
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -60,20 +56,21 @@ function toDateInputValue(iso: string): string {
 // Sales Summary Tab
 // ---------------------------------------------------------------------------
 function SalesSummaryTab() {
+  const orders = useOrders() // live from OrdersContext — reflects POS-placed orders
+
   // Date range defaults: earliest and latest order dates in seed data
   const [startDate, setStartDate] = React.useState("2026-07-01")
   const [endDate, setEndDate] = React.useState("2026-07-31")
 
-  // Filter MOCK_ORDERS by date range (inclusive)
-  // DEBT-011: reads static seed array — session-placed orders not included
+  // Filter live orders by date range (inclusive)
   const filtered = React.useMemo(() => {
     const start = new Date(startDate + "T00:00:00Z").getTime()
     const end   = new Date(endDate   + "T23:59:59Z").getTime()
-    return MOCK_ORDERS.filter((o) => {
+    return orders.filter((o) => {
       const t = new Date(o.date).getTime()
       return t >= start && t <= end
     })
-  }, [startDate, endDate])
+  }, [startDate, endDate, orders])
 
   // Summary metrics
   const totalRevenue   = filtered.reduce((s, o) => s + o.total, 0)
@@ -222,6 +219,9 @@ function InventoryValuationTab() {
   const products = useProducts() // live from ProductsContext
   const [categoryFilter, setCategoryFilter] = React.useState("All")
 
+  // categories derived without useMemo — intentional simplicity choice at
+  // current data scale (8 products). useDashboardMetrics uses useMemo([products])
+  // for the same pattern; both are correct. Add useMemo here if product count grows.
   const categories = React.useMemo(() => {
     const cats = Array.from(new Set(products.map((p) => p.category))).sort()
     return ["All", ...cats]
@@ -391,10 +391,10 @@ function InventoryValuationTab() {
 // Customer & Supplier Activity Tab
 // ---------------------------------------------------------------------------
 function ActivityTab() {
-  // Customer activity — derived from MOCK_ORDERS via getCustomerStats(id)
-  // DEBT-011: reads static MOCK_ORDERS seed data
-  // DEBT-010: no ledger concept (balance, credit, invoices) — this is spend
-  //           summary only; a true ledger requires backend financial data model
+  const orders = useOrders() // live from OrdersContext
+
+  // Customer activity — derived from live orders via customerId FK
+  // DEBT-010: no ledger concept (balance, credit, invoices) — spend summary only
   type CustomerRow = {
     id: string
     name: string
@@ -404,8 +404,16 @@ function ActivityTab() {
   }
 
   const customerRows: CustomerRow[] = MOCK_CUSTOMERS.map((c) => {
-    const { totalOrders, totalSpend } = getCustomerStats(c.id)
-    return { id: c.id, name: c.name, isActive: c.isActive, totalOrders, totalSpend }
+    // Derive directly from live orders — not via getCustomerStats() which reads
+    // the static MOCK_ORDERS constant
+    const matched = orders.filter((o) => o.customerId === c.id)
+    return {
+      id: c.id,
+      name: c.name,
+      isActive: c.isActive,
+      totalOrders: matched.length,
+      totalSpend: matched.reduce((s, o) => s + o.total, 0),
+    }
   }).sort((a, b) => b.totalSpend - a.totalSpend)
 
   const customerColumns: ColumnDef<CustomerRow>[] = [
@@ -430,7 +438,7 @@ function ActivityTab() {
   ]
 
   // Supplier spend — derived from MOCK_PURCHASE_ORDERS by supplierName
-  // DEBT-011: reads static seed data
+  // (POs are not in shared state yet — still reads static seed data)
   // TODO: PROV-FR-PUR-03 — replace supplierName match with supplier ID FK
   type SupplierRow = {
     name: string

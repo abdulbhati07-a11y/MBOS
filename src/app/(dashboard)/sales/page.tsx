@@ -15,7 +15,8 @@ import { Modules, Actions } from "@/config/permissions"
 
 import { OrderDetailDialog } from "@/components/sales/OrderDetailDialog"
 import { NewOrderForm } from "@/components/sales/NewOrderForm"
-import { MOCK_ORDERS, OrderRecord, OrderStatus } from "@/lib/mock-data/orders"
+import { OrderRecord, OrderStatus } from "@/lib/mock-data/orders"
+import { useOrders, useSetOrders } from "@/contexts/orders-context"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,8 +39,9 @@ export default function SalesPage() {
 
   const canRefund = useCanPerform(Modules.SALES, Actions.REFUND)
 
-  // Order History state
-  const [orders, setOrders] = React.useState<OrderRecord[]>(MOCK_ORDERS)
+  // Order History state — live from shared OrdersContext
+  const orders = useOrders()
+  const setOrders = useSetOrders()
   const [pageIndex, setPageIndex] = React.useState(0)
   const [detailOrder, setDetailOrder] = React.useState<OrderRecord | null>(null)
   const [detailOpen, setDetailOpen] = React.useState(false)

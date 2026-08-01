@@ -13,12 +13,13 @@
 // ---------------------------------------------------------------------------
 
 import { useMemo } from "react"
-import { MOCK_ORDERS, OrderRecord } from "@/lib/mock-data/orders"
+import { OrderRecord } from "@/lib/mock-data/orders"
 import { MOCK_CUSTOMERS } from "@/lib/mock-data/customers"
 import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
 import { MOCK_PURCHASE_ORDERS, PO_TRANSITIONS, POStatus } from "@/lib/mock-data/purchase-orders"
 import { ProductRecord } from "@/lib/mock-data/products"
 import { useProducts } from "@/contexts/products-context"
+import { useOrders } from "@/contexts/orders-context"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,6 +72,8 @@ export type DashboardMetrics = {
 export function useDashboardMetrics(): DashboardMetrics {
   // Live products from shared context — reflects Inventory adjustments
   const products = useProducts()
+  // Live orders from shared context — reflects POS-placed orders (DEBT-011 resolved)
+  const orders = useOrders()
 
   return useMemo(() => {
 
@@ -90,10 +93,10 @@ export function useDashboardMetrics(): DashboardMetrics {
     const totalSupplierCount = MOCK_SUPPLIERS.length
 
     // ── Widget 3: Sales / Orders ───────────────────────────────────────────
-    const totalOrderCount = MOCK_ORDERS.length
-    const totalOrderValue = MOCK_ORDERS.reduce((sum, o) => sum + o.total, 0)
+    const totalOrderCount = orders.length
+    const totalOrderValue = orders.reduce((sum, o) => sum + o.total, 0)
 
-    const recentOrders: RecentOrderRow[] = [...MOCK_ORDERS]
+    const recentOrders: RecentOrderRow[] = [...orders]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 5)
       .map((o) => ({
@@ -133,5 +136,5 @@ export function useDashboardMetrics(): DashboardMetrics {
       lowStockCount,
       outOfStockCount,
     }
-  }, [products]) // re-derives when live product state changes
+  }, [products, orders]) // re-derives when live product or order state changes
 }
