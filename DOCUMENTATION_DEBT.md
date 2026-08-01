@@ -208,6 +208,23 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 ---
 
-## Resolved Items
+### DEBT-013 — Rate limit thresholds unspecified
+
+**Where it needs to land:** Section 2 NFR (rate limiting security requirement) and Section 6.1 (API Design — rate limiting subsection)
+
+**What needs to be written:** Specific numeric thresholds for:
+- Per-tenant request rate (requests per minute/second)
+- Per-IP request rate for unauthenticated endpoints (login, signup)
+- Burst allowance before throttling kicks in
+- Which endpoints (if any) have stricter per-endpoint limits (e.g., auth endpoints to prevent credential stuffing)
+- The `429` response shape and `Retry-After` header format
+
+**Current state:** Section 6.1 has the structural description (per-tenant vs per-IP, burst allowance, `429 + Retry-After`) with TBD markers on numeric values. Rate limiting is named as a security requirement in the NFR list but no concrete thresholds were ever specified in Sections 1–3.
+
+**Source:** Section 6.1 rate-limiting subsection — TBD markers. Section 2 NFR list — rate limiting named but unnumbered. Identified during Section 6 outline review.
+
+**Status:** Open — numeric thresholds require explicit product decision before implementation
+
+---
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
