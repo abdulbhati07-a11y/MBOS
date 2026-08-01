@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { CustomerRecord } from "@/lib/mock-data/customers"
-import { MOCK_ORDERS, OrderStatus } from "@/lib/mock-data/orders"
+import { OrderStatus } from "@/lib/mock-data/orders"
+import { useOrders } from "@/contexts/orders-context"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { EmptyState } from "@/components/shared/EmptyState"
 import {
@@ -45,13 +46,17 @@ export function CustomerDetailDialog({
   onOpenChange,
   customer,
 }: CustomerDetailDialogProps) {
+  // Hook called unconditionally — rules of hooks
+  const allOrders = useOrders()
+
   if (!customer) return null
 
   // Filter by customerId (FK) — structurally correct and collision-safe.
   // Orders with customerId: null (unlinked POS orders) are correctly excluded.
   // Single filter: both table rows and summary totals derive from this one
   // array so they are structurally guaranteed to agree.
-  const orders = MOCK_ORDERS.filter((o) => o.customerId === customer.id)
+  // Reads from live OrdersContext — reflects session-placed orders.
+  const orders = allOrders.filter((o) => o.customerId === customer.id)
   const totalOrders = orders.length
   const totalSpend = orders.reduce((sum, o) => sum + o.total, 0)
 

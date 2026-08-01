@@ -18,9 +18,9 @@ import { CustomerDetailDialog } from "@/components/customers/CustomerDetailDialo
 import {
   MOCK_CUSTOMERS,
   CustomerRecord,
-  getCustomerStats,
 } from "@/lib/mock-data/customers"
 import { CustomerValues } from "@/lib/validation/customers"
+import { useOrders } from "@/contexts/orders-context"
 
 // TODO: NewOrderForm.customerName is free-text and unlinked to CustomerRecord;
 // linking is deferred to backend integration phase.
@@ -42,6 +42,9 @@ export default function CustomersPage() {
 
   // [PROV-PERM-03] Permission via RoleContext
   const canManage = useCanPerform(Modules.CUSTOMERS, Actions.WRITE)
+
+  // Live orders from shared context — customer spend reflects session-placed orders
+  const orders = useOrders()
 
   // Customer list state — starts from seed data, mutations are in-memory only
   const [customers, setCustomers] = React.useState<CustomerRecord[]>(MOCK_CUSTOMERS)
@@ -152,16 +155,18 @@ export default function CustomersPage() {
           id: "totalOrders",
           header: "Orders",
           cell: ({ row }) => {
-            const { totalOrders } = getCustomerStats(row.original.id)
-            return totalOrders
+            const count = orders.filter((o) => o.customerId === row.original.id).length
+            return count
           },
         },
         {
           id: "totalSpend",
           header: "Total Spend",
           cell: ({ row }) => {
-            const { totalSpend } = getCustomerStats(row.original.id)
-            return `$${totalSpend.toFixed(2)}`
+            const spend = orders
+              .filter((o) => o.customerId === row.original.id)
+              .reduce((s, o) => s + o.total, 0)
+            return `$${spend.toFixed(2)}`
           },
         },
         {
@@ -237,7 +242,7 @@ export default function CustomersPage() {
       return cols
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canManage]
+    [canManage, orders]
   )
 
   return (
