@@ -118,6 +118,36 @@ Current state: `PurchaseOrderRecord.supplierName` is a stored string, so deactiv
 
 ---
 
+### DEBT-007 — FR-SET-02 custom roles require type system changes
+
+**Where it needs to land:** Section 2 FR-SET-02, Section 6 (API Design — roles/permissions endpoints), Section 9 (Settings module spec)
+
+**What needs to be written:** Custom role support is not purely a UI task. The current `Role` type is `"Owner" | "Manager" | "Cashier"` — a closed union. `PermissionMatrix` is keyed on this type, and `canPerform` looks up `DEFAULT_ROLE_PERMISSIONS` which is a static constant. Supporting tenant-defined roles requires:
+1. Widening `Role` to `string` (losing compile-time exhaustiveness on the matrix) OR introducing a parallel runtime registry alongside the static defaults
+2. Updating `canPerform` to look up a dynamic store (API-backed) rather than the static constant
+3. A backend roles/permissions API with tenant scoping
+4. UI for creating, editing, and deleting custom roles (FR-SET-02)
+
+None of these are UI-only changes. The permission matrix UI built in Step 10 is explicitly read-only and displays the three fixed roles only.
+
+**Source:** `src/config/permissions.ts` — `Role` type definition and `DEFAULT_ROLE_PERMISSIONS`. `src/components/settings/PermissionMatrixTable.tsx` — read-only notice. Introduced in Step 10.
+
+**Status:** Open — out of scope until backend auth/roles API is designed (Section 6)
+
+---
+
+### DEBT-008 — Company profile default tax rate not wired to POS
+
+**Where it needs to land:** Section 8 (Sales module spec) and Section 9 (Settings module spec) — the relationship between a company-level default tax rate and the per-order tax rate in the POS
+
+**What needs to be written:** When the Settings API exists, the default tax rate configured in Company Profile should pre-populate `NewOrderForm`'s tax rate field. Currently `NewOrderForm` hardcodes `taxRate: 0` as its default. The Company Profile form in Settings stores its value in local React state only — there is no cross-component wiring.
+
+**Source:** `src/components/settings/CompanyProfileForm.tsx` — DEBT-008 comment on the save handler. `src/components/sales/NewOrderForm.tsx` — `defaultValues.taxRate: 0`. Introduced in Step 10.
+
+**Status:** Open — requires a settings context or API; deferred to backend integration phase
+
+---
+
 ## Resolved Items
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
