@@ -227,4 +227,37 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 ---
 
+### DEBT-014 — Login-time tenant resolution unspecified
+
+**Where it needs to land:** Section 6.3 (POST /auth/login) and Section 5 (User uniqueness model)
+
+**What needs to be written:** How the server decides *which tenant's* User record a login attempt is checked against. Section 6.3 says login "validates email and password against the current tenant's User record," but at login time no session — and therefore no tenant context — exists yet, and the platform defines no subdomain/Host-based tenant routing. Section 5 makes email unique per `(tenantId, email)`, **not** globally (`User @@unique([tenantId, email])`), so one email address may legitimately belong to several tenants. Nothing in Section 6.3 resolves that ambiguity. A decision is required between:
+1. **Tenant carried on the request** — an explicit `tenantSlug`/`tenantId` in the login body, or one derived from a subdomain / `Host` header.
+2. **Global email uniqueness** — change the Section 5 constraint to `email @unique` so an address maps to exactly one user.
+3. **Return-and-choose** — respond with the list of tenants for that email and let the client pick, then re-submit.
+
+**Current state:** The backend implements option 1 as an *optional* `tenantSlug` on `LoginDto`. Both "no candidate" and "more than one candidate" collapse to an identical generic `401` (issued only after a decoy bcrypt comparison), so the response cannot be used to enumerate which emails or tenants exist. This is an interim mechanism, not the documented contract — Section 6.3 still needs the canonical strategy written down.
+
+**Source:** `backend/src/auth/dto/login.dto.ts` — `tenantSlug` field and comment. `backend/src/auth/auth.service.ts` — `login()`, `candidates.length !== 1` branch. `backend/prisma/schema.prisma` — `User @@unique([tenantId, email])`. Identified during the Section 6.3 auth implementation.
+
+**Status:** Open — interim `tenantSlug` mechanism implemented; canonical tenant-resolution strategy requires a product/architecture decision and must be written into Section 6.3.
+
+---
+
+### DEBT-015 — Password reset endpoints specified but not implementable from the current schema
+
+**Where it needs to land:** Section 6.3 (POST /auth/password/forgot, POST /auth/password/reset), Section 5 (ERD — a password-reset-token entity), Section 4 (external dependencies — transactional email)
+
+**What needs to be written:** Two prerequisites the specified endpoints depend on but that no section defines:
+1. **A reset-token entity.** Section 5's ERD has `RefreshToken` but nothing to persist a single-use, expiring password-reset token. `POST /auth/password/reset` ("consumes a reset token and sets a new password … existing refresh tokens for this user are revoked") cannot be built without one. Needs a `PasswordResetToken` model — `userId` FK, `tokenHash` unique, `expiresAt`, `usedAt` — stored hashed at rest, mirroring how `RefreshToken` keeps only a digest.
+2. **A mail transport.** `POST /auth/password/forgot` "initiates email-based password reset," but no email/transactional-mail provider is chosen anywhere in Sections 4–6.
+
+**Current state:** Both endpoints are documented in Section 6.3 but are **deliberately not implemented** in the auth vertical slice. Building them now would mean inventing a data model and an infrastructure dependency the design docs do not define. The password-complexity rules they would enforce are themselves still open (DEBT-001).
+
+**Source:** `docs/section-6-api-design.md` §6.3 — `password/forgot` and `password/reset`. Absence of a reset-token model in `backend/prisma/schema.prisma` and Section 5. No mail transport named in Sections 4–6. Identified during the Section 6.3 auth implementation.
+
+**Status:** Open — blocked on a Section 5 schema addition (`PasswordResetToken`) and a Section 4 mail-transport decision; endpoints omitted from the implemented slice until both exist. Related: [DEBT-001].
+
+---
+
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
