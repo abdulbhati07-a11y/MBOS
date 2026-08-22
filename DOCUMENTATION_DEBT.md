@@ -221,9 +221,13 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 **Current state:** Section 6.1 has the structural description (per-tenant vs per-IP, burst allowance, `429 + Retry-After`) with TBD markers on numeric values. Rate limiting is named as a security requirement in the NFR list but no concrete thresholds were ever specified in Sections 1–3.
 
-**Source:** Section 6.1 rate-limiting subsection — TBD markers. Section 2 NFR list — rate limiting named but unnumbered. Identified during Section 6 outline review.
+**Implementation status (interim):** The mechanism is now built — `backend/src/rate-limit/` — with provisional thresholds in `rate-limit.config.ts`, each carrying the reasoning for the number chosen: 10/min per IP on login and mfa/verify, 120/min per IP otherwise, 300/min per tenant, ×1.5 burst allowance. All four are overridable by env var (`RATE_LIMIT_*`, documented in `backend/.env.example`), so resolving this item should mean changing configuration, not code. The `429` body and `Retry-After` header match Section 6.1 exactly.
 
-**Status:** Open — numeric thresholds require explicit product decision before implementation
+**Additional unspecified item — proxy trust:** The per-IP limit keys on `req.ip`, which is the socket address unless Express is configured with `trust proxy`. Behind a load balancer without it, every request appears to originate from the balancer and one noisy client would throttle every tenant at once; trusting `X-Forwarded-For` too permissively lets a client forge the header and evade the limit entirely. Sections 4–6 do not specify the deployment topology, so the correct setting cannot be chosen yet. This must be decided alongside the thresholds.
+
+**Source:** Section 6.1 rate-limiting subsection — TBD markers. Section 2 NFR list — rate limiting named but unnumbered. Identified during Section 6 outline review. Interim implementation and the proxy-trust question added during the Section 6.2 middleware build.
+
+**Status:** Open — numeric thresholds and the proxy-trust setting require explicit product/infrastructure decisions. Interim values implemented and isolated to config.
 
 ---
 
@@ -257,6 +261,44 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 **Source:** `docs/section-6-api-design.md` §6.3 — `password/forgot` and `password/reset`. Absence of a reset-token model in `backend/prisma/schema.prisma` and Section 5. No mail transport named in Sections 4–6. Identified during the Section 6.3 auth implementation.
 
 **Status:** Open — blocked on a Section 5 schema addition (`PasswordResetToken`) and a Section 4 mail-transport decision; endpoints omitted from the implemented slice until both exist. Related: [DEBT-001].
+
+---
+
+### DEBT-016 — Module-key taxonomy diverges across layers
+
+**Where it needs to land:** Section 5.3 (`RolePermission.module`, `TenantModuleSubscription.moduleKey`) and Section 6.2 (which module each endpoint group belongs to)
+
+**What needs to be written:** One canonical list of module keys, and where it lives.
+
+Section 5.3 states that `module` values "match the `Modules` and `Actions` TypeScript enums exactly", and Section 4 (lines 158–173) states that the frontend's `DEFAULT_ROLE_PERMISSIONS` *becomes* the `RolePermission` seed data, the TypeScript constant being "the frontend's optimistic cache of this data". That makes `src/config/permissions.ts` canonical. Three problems follow:
+
+1. **`billing` exists only on the backend.** Section 6.10 defines billing endpoints, so the API needs a `billing` module key, but the frontend `Modules` enum has no `BILLING` member. The backend now grants `billing` to Owner only — an **inference**, not a documented rule: Section 6.10 states no required permission for its endpoints, and the canonical matrix has no `billing` row to copy. This needs confirming.
+2. **The backend was missing four keys the frontend has.** `dashboard`, `clinic`, `pharmacy` and `restaurant` were absent from the backend's module list, so under the fail-closed module check every endpoint in those modules would have returned `403`. Now added.
+3. **The list is mirrored by hand in two files** — `src/config/permissions.ts` and `backend/src/access-control/access-control.constants.ts` — so it can drift again silently, which is exactly how the divergence below arose. It should be generated from one source, or a test should assert the two agree.
+
+**Related — the divergence this replaced (resolved in code, still needs writing up):** before the Section 6.2 build, `backend/src/prisma/seed.ts` granted more than the canonical matrix — Manager had `settings.write` plus `delete` on inventory/customers/purchases; Cashier had `customers.write` and `reports.read`. That was inert while nothing read the table, but the permission guard makes `RolePermission` live authorization, so a Manager would have been able to create branches and custom roles (Section 6.4/6.5 gate those on `settings.write`) while the UI hid the controls. The seed now mirrors the canonical matrix cell-for-cell and *prunes* non-canonical rows for built-in roles; `access-control.e2e.spec.ts` asserts that Manager cannot write settings and Cashier cannot read reports, so it cannot silently regress.
+
+**Source:** `src/config/permissions.ts` (`Modules`, `DEFAULT_ROLE_PERMISSIONS`) vs `backend/src/access-control/access-control.constants.ts` (`MODULE_KEYS`, `ROLE_MATRIX`). `docs/section-5-database-design.md` line 146. `docs/section-4-system-architecture.md` lines 158–173. `docs/section-6-api-design.md` §6.10. Identified while implementing chain steps 5 and 6.
+
+**Status:** Open — code reconciled to the canonical matrix; the canonical *list* (including whether `billing` belongs in the frontend enum, and who may access it) still needs writing into Sections 5.3/6.2, and the hand-mirroring replaced. Related: [DEBT-007].
+
+---
+
+### DEBT-017 — Section 6.2 under-specifies two behaviours of the middleware chain
+
+**Where it needs to land:** Section 6.2 (Middleware Chain), steps 2, 5 and 6
+
+**What needs to be written:** Two decisions the implementation had to make that the chain description does not cover.
+
+1. **What happens to an authenticated route that declares no module or action.** Section 6.2 says steps 5 and 6 read the requirement "from the route metadata" but never says what to do when there is none. Implemented **fail closed**: such a route returns `403`, on the reasoning that fail-open turns every forgotten decorator into an unguarded endpoint, whereas fail-closed turns the same mistake into a test failure. That required an explicit exemption, `@NoModuleRequired()`, for authenticated routes that legitimately belong to no business module — currently only `GET /auth/me`, which returns the caller's own identity and is what the frontend calls to discover its permissions, so gating it on a permission would be circular. Neither the default nor the exemption appears in the doc.
+
+2. **Per-tenant rate limiting cannot precede authentication.** Section 6.2 places rate limiting at step 2, before auth at step 3, while Section 6.1 also requires a per-tenant limit keyed on the JWT's `tenantId` — which does not exist until step 3 has run. The two requirements are not simultaneously satisfiable. Implemented as a split: a per-IP limit before authentication (strict on the auth endpoints, which is where the unauthenticated flood risk actually is) and a per-tenant limit immediately after. The doc's step numbering should be amended to describe both halves.
+
+**Also worth recording:** the chain's ordering is itself a security property — rate limiting must precede bcrypt work, and steps 5–6 depend on the context step 4 binds. The implementation therefore sequences all of it explicitly in one guard (`backend/src/common/guards/api-access.guard.ts`) rather than registering four global guards and depending on provider-resolution order. Section 6.2 describes the order but does not say it must be *guaranteed* rather than incidental.
+
+**Source:** `docs/section-6-api-design.md` §6.2 lines 107–160 and §6.1 lines 82–104. `backend/src/common/guards/api-access.guard.ts`, `backend/src/access-control/access-control.decorators.ts`, `backend/src/rate-limit/rate-limit.guard.ts`. Identified while implementing chain steps 2, 5 and 6.
+
+**Status:** Open — both behaviours implemented and commented in code; Section 6.2 needs amending so the contract is documented rather than inferred from the implementation.
 
 ---
 
