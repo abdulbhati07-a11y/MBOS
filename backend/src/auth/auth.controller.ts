@@ -1,0 +1,122 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Req,
+  Res,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { CookieOptions, Request, Response } from 'express';
+import { Public } from '../common/decorators/public.decorator';
+import { AuthService, AuthenticatedSession } from './auth.service';
+import {
+  AccessTokenResponse,
+  CurrentUserResponse,
+  LoginResponse,
+} from './dto/auth-response.dto';
+import { LoginDto } from './dto/login.dto';
+import { MfaVerifyDto } from './dto/mfa-verify.dto';
+
+/** Section 6.3 puts the refresh token in a cookie, never in a response body. */
+export const REFRESH_COOKIE = 'mbos_refresh_token';
+
+@Controller('auth')
+export class AuthController {
+  private readonly isProduction: boolean;
+
+  constructor(
+    private readonly auth: AuthService,
+    config: ConfigService,
+  ) {
+    this.isProduction = config.get<string>('NODE_ENV') === 'production';
+  }
+
+  @Public()
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  async login(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<LoginResponse> {
+    const outcome = await this.auth.login(dto);
+    if (outcome.kind === 'mfaRequired') {
+      return { mfaRequired: true, mfaSessionToken: outcome.mfaSessionToken };
+    }
+    return this.completeSession(outcome.session, res);
+  }
+
+  @Public()
+  @Post('mfa/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMfa(
+    @Body() dto: MfaVerifyDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AccessTokenResponse> {
+    return this.completeSession(await this.auth.verifyMfa(dto), res);
+  }
+
+  @Public()
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AccessTokenResponse> {
+    const presented = readRefreshCookie(req);
+    const session = await this.auth.refresh(presented ?? '');
+    return this.completeSession(session, res);
+  }
+
+  @Public()
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    await this.auth.logout(readRefreshCookie(req));
+    res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
+  }
+
+  /** Authenticated — the only endpoint in 6.3 that is not @Public. */
+  @Get('me')
+  async me(): Promise<CurrentUserResponse> {
+    return this.auth.currentUser();
+  }
+
+  private completeSession(
+    session: AuthenticatedSession,
+    res: Response,
+  ): AccessTokenResponse {
+    res.cookie(REFRESH_COOKIE, session.refresh.token, {
+      ...this.cookieOptions(),
+      expires: session.refresh.expiresAt,
+    });
+    return {
+      accessToken: session.accessToken,
+      expiresIn: session.expiresIn,
+    };
+  }
+
+  /**
+   * `secure` is conditional so the cookie still works over http://localhost in
+   * development; everything else matches Section 6.3 verbatim. `path` is scoped
+   * to the auth routes because refresh is the only consumer.
+   */
+  private cookieOptions(): CookieOptions {
+    return {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: this.isProduction,
+      path: '/api/v1/auth',
+    };
+  }
+}
+
+function readRefreshCookie(req: Request): string | undefined {
+  const cookies = req.cookies as Record<string, string> | undefined;
+  return cookies?.[REFRESH_COOKIE];
+}

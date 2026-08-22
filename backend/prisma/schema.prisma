@@ -1,0 +1,478 @@
+// =============================================================================
+// MBOS Prisma Schema
+// Implements every table from docs/section-5-database-design.md exactly.
+// Naming conventions per Section 5.10:
+//   - Monetary columns: *Cents suffix, Int type
+//   - Snapshot columns: *Snapshot suffix
+//   - Soft delete: deletedAt DateTime?
+//   - isActive Boolean @default(true) where specified
+//   - All PKs: String @id @default(uuid())
+//   - tenantId: required on all tenant-scoped models; nullable only where
+//     Section 5 explicitly states so (Role.tenantId for global built-ins)
+//
+// Indexing policy:
+//   Every read path filters on tenantId (Section 4.3). Where a model already
+//   has @@unique([tenantId, ...]) that composite serves as the tenantId index
+//   (tenantId is the leading column), so no redundant @@index is declared.
+//   Models without such a constraint get an explicit @@index([tenantId]).
+//   All foreign-key scalars are indexed: PostgreSQL does not index FK columns
+//   automatically, and Prisma only adds implicit relation indexes on MySQL.
+//   Additional composite indexes match the query filters documented in
+//   Section 6 (status, date ranges, category).
+// =============================================================================
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  // NestJS compiles to CommonJS (tsconfig module: nodenext, no "type": "module"),
+  // so the generated client must be CJS too.
+  moduleFormat = "cjs"
+}
+
+// Connection URL lives in prisma.config.ts (datasource.url), per Prisma v7 —
+// url/directUrl/shadowDatabaseUrl in this block are deprecated.
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// 5.2 Identity and Tenancy Group
+// =============================================================================
+
+/// Billing and isolation root. Every other entity traces back here.
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  status    String   @default("Active")   // Active | Suspended | Cancelled
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  settings             TenantSettings?
+  branches             Branch[]
+  users                User[]
+  moduleSubscriptions  TenantModuleSubscription[]
+  subscription         TenantSubscription?
+  customers            Customer[]
+  suppliers            Supplier[]
+  products             Product[]
+  orders               Order[]
+  refundTransactions   RefundTransaction[]
+  purchaseOrders       PurchaseOrder[]
+  poStatusTransitions  POStatusTransition[]
+  stockAdjustments     StockAdjustment[]
+}
+
+/// 1:1 extension of Tenant for mutable company config (resolves DEBT-008).
+/// defaultTaxRateBps pre-fills NewOrderForm at session start.
+/// currencyCode is ISO 4217 — never store the display symbol.
+model TenantSettings {
+  tenantId          String   @id
+  companyName       String   @default("")
+  defaultTaxRateBps Int      @default(0)   // basis points; 800 = 8.00%
+  currencyCode      String   @default("USD") // ISO 4217
+  timezone          String   @default("UTC")
+  updatedAt         DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Multi-location entity. Branch Switcher in AppShell (commit 6b72ea4) backed here.
+/// Partial unique index on (tenantId) WHERE isDefault = true enforced via raw SQL
+/// in migration — Prisma does not support partial unique indexes natively.
+model Branch {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  address   String   @default("")
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  orders           Order[]
+  stockAdjustments StockAdjustment[]
+
+  @@index([tenantId])
+}
+
+/// One user per tenant (D-01). Email unique within tenant, not globally.
+model User {
+  id           String    @id @default(uuid())
+  tenantId     String
+  email        String
+  passwordHash String    // bcrypt; complexity enforced at application layer (DEBT-001)
+  roleId       String
+  isActive     Boolean   @default(true)
+  mfaEnabled   Boolean   @default(false)
+  mfaSecret    String?   // null until MFA enrolled
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  role                 Role                  @relation(fields: [roleId], references: [id])
+  refreshTokens        RefreshToken[]
+  refundTransactions   RefundTransaction[]
+  poStatusTransitions  POStatusTransition[]
+  stockAdjustments     StockAdjustment[]
+
+  @@unique([tenantId, email])
+  @@index([roleId])
+}
+
+/// Refresh token store for JWT rotation.
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// =============================================================================
+// 5.3 Access Control Group
+// =============================================================================
+
+/// Global built-ins have tenantId = null, isBuiltIn = true.
+/// Custom roles (DEBT-007) have a real tenantId and isBuiltIn = false.
+/// Seeded at DB init: Owner, Manager, Cashier (tenantId null).
+model Role {
+  id        String   @id @default(uuid())
+  tenantId  String?  // nullable — null = global built-in
+  name      String
+  isBuiltIn Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  permissions RolePermission[]
+  users       User[]
+
+  @@unique([tenantId, name])
+}
+
+/// Backend of DEFAULT_ROLE_PERMISSIONS from frontend.
+/// module/action values must match Modules/Actions enums.
+model RolePermission {
+  id      String  @id @default(uuid())
+  roleId  String
+  module  String  // matches Modules enum: 'sales', 'inventory', etc.
+  action  String  // matches Actions enum: 'read', 'write', 'delete', 'refund'
+  granted Boolean @default(true)
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, module, action])
+}
+
+/// Sole access-control authority for module access (D-03, FR-BILL-03).
+/// Middleware reads this; never reads Plan or PlanModule.
+/// disabledAt null = currently enabled.
+model TenantModuleSubscription {
+  id         String    @id @default(uuid())
+  tenantId   String
+  moduleKey  String    // matches Modules enum
+  enabledAt  DateTime  @default(now())
+  disabledAt DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, moduleKey])
+}
+
+/// Billing/onboarding convenience only — never read by access-control middleware.
+model Plan {
+  id             String   @id @default(uuid())
+  name           String   @unique
+  description    String   @default("")
+  priceMonthly   Int      // cents
+  priceAnnual    Int      // cents
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  modules       PlanModule[]
+  subscriptions TenantSubscription[]
+}
+
+/// Which modules a plan includes — for onboarding convenience only.
+model PlanModule {
+  id        String @id @default(uuid())
+  planId    String
+  moduleKey String
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, moduleKey])
+}
+
+/// Billing record. No effect on module access (TenantModuleSubscription owns that).
+model TenantSubscription {
+  id                 String    @id @default(uuid())
+  tenantId           String    @unique
+  planId             String
+  status             String    // Active | PastDue | Cancelled | Trialing
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelledAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+}
+
+// =============================================================================
+// 5.4 Core Business Entities Group
+// =============================================================================
+
+/// Maps to CustomerRecord. Email unique within tenant (DEBT-004 FK target).
+model Customer {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  email     String
+  phone     String    @default("")
+  address   String    @default("")
+  notes     String    @default("")
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id])
+  orders Order[]
+
+  @@unique([tenantId, email])
+}
+
+/// Maps to SupplierRecord. categories free-text pending taxonomy (DEBT-005).
+model Supplier {
+  id            String    @id @default(uuid())
+  tenantId      String
+  name          String
+  contactPerson String    @default("")
+  email         String
+  phone         String    @default("")
+  address       String    @default("")
+  categories    String    @default("")  // free-text, comma-separated (DEBT-005)
+  notes         String    @default("")
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([tenantId, email])
+}
+
+/// Maps to ProductRecord. priceCents/costCents replace float price/cost (DEBT-012).
+/// stock modified only via StockAdjustment — never direct PATCH on this field.
+model Product {
+  id           String    @id @default(uuid())
+  tenantId     String
+  name         String
+  sku          String
+  category     String    @default("")
+  priceCents   Int       @default(0)
+  costCents    Int       @default(0)
+  stock        Int       @default(0)
+  reorderPoint Int       @default(0)
+  uom          String    @default("piece")
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id])
+  orderLines       OrderLine[]
+  poLines          POLine[]
+  stockAdjustments StockAdjustment[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, category])
+}
+
+// =============================================================================
+// 5.5 Sales / Orders Group
+// =============================================================================
+
+/// Maps to OrderRecord. Financial columns locked after status=Completed (BR-03).
+/// customerId nullable for walk-in (DEBT-004 partial).
+/// taxRateBps is a snapshot — independent of TenantSettings.defaultTaxRateBps.
+model Order {
+  id             String    @id @default(uuid())
+  tenantId       String
+  branchId       String
+  orderNumber    String
+  date           DateTime  @default(now())
+  customerId     String?   // nullable for walk-in orders
+  paymentMethod  String    // Cash | Card | Mobile
+  status         String    @default("Pending")  // Pending | Completed | Refunded
+  taxRateBps     Int       @default(0)
+  subtotalCents  Int       @default(0)
+  taxAmountCents Int       @default(0)
+  totalCents     Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  branch             Branch              @relation(fields: [branchId], references: [id])
+  customer           Customer?           @relation(fields: [customerId], references: [id])
+  lines              OrderLine[]
+  refundTransactions RefundTransaction[]
+
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId, date])
+  @@index([tenantId, status])
+  @@index([customerId])
+  @@index([branchId])
+}
+
+/// productNameSnapshot: denormalized — immune to product rename.
+/// unitPriceCents: snapshot of price at sale time.
+model OrderLine {
+  id                  String @id @default(uuid())
+  orderId             String
+  productId           String
+  productNameSnapshot String
+  unitPriceCents      Int
+  quantity            Int
+  lineTotalCents      Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+/// System of record for refunds (BR-03 reversal). Never UPDATE on Order.
+/// v1: order-level amount only — no FK to OrderLine (per-line attribution is v2).
+/// Multiple rows per orderId supported (partial refunds).
+model RefundTransaction {
+  id                String   @id @default(uuid())
+  tenantId          String
+  orderId           String
+  amountCents       Int
+  reason            String   @default("")
+  createdByUserId   String
+  createdAt         DateTime @default(now())
+
+  tenant        Tenant @relation(fields: [tenantId], references: [id])
+  order         Order  @relation(fields: [orderId], references: [id])
+  createdByUser User   @relation(fields: [createdByUserId], references: [id])
+
+  @@index([tenantId])
+  @@index([orderId])
+  @@index([createdByUserId])
+}
+
+// =============================================================================
+// 5.6 Purchases Group
+// =============================================================================
+
+/// supplierId is real FK — replaces supplierName string-match (PROV-FR-PUR-03).
+/// supplierNameSnapshot: denormalized — immune to supplier rename/deactivation (DEBT-003).
+model PurchaseOrder {
+  id                   String   @id @default(uuid())
+  tenantId             String
+  poNumber             String
+  date                 DateTime @default(now())
+  supplierId           String
+  supplierNameSnapshot String   // snapshot at creation time
+  status               String   @default("Draft")  // Draft | Sent | Received | Cancelled
+  subtotalCents        Int      @default(0)
+  totalCents           Int      @default(0)
+  notes                String   @default("")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  tenant            Tenant               @relation(fields: [tenantId], references: [id])
+  supplier          Supplier             @relation(fields: [supplierId], references: [id])
+  lines             POLine[]
+  statusTransitions POStatusTransition[]
+
+  @@unique([tenantId, poNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, date])
+  @@index([supplierId])
+}
+
+/// unitCostCents: buyer-negotiated — independent of Product.costCents.
+model POLine {
+  id                  String @id @default(uuid())
+  purchaseOrderId     String
+  productId           String
+  productNameSnapshot String
+  unitCostCents       Int
+  quantity            Int
+  lineTotalCents      Int
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+/// Audit log for PO status changes (DEBT-002 server-side enforcement).
+/// Transition validated against PO_TRANSITIONS map before insert.
+model POStatusTransition {
+  id              String   @id @default(uuid())
+  tenantId        String
+  purchaseOrderId String
+  fromStatus      String
+  toStatus        String
+  changedByUserId String
+  changedAt       DateTime @default(now())
+
+  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  changedByUser   User          @relation(fields: [changedByUserId], references: [id])
+
+  @@index([tenantId])
+  @@index([purchaseOrderId])
+  @@index([changedByUserId])
+}
+
+// =============================================================================
+// 5.7 Inventory Group
+// =============================================================================
+
+/// Audit trail for every Product.stock change.
+/// Product.stock is the current level; this table is the history.
+/// Product.stock updated atomically with this insert in a single transaction.
+model StockAdjustment {
+  id              String   @id @default(uuid())
+  tenantId        String
+  branchId        String
+  productId       String
+  type            String   // ADD | REMOVE | COUNT
+  quantityDelta   Int      // positive for ADD/COUNT increase; negative for REMOVE
+  reasonCode      String   // Received | Damaged | Correction | Returned | Sale | PurchaseReceived
+  newStockLevel   Int      // snapshot of Product.stock after adjustment
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant  @relation(fields: [tenantId], references: [id])
+  branch        Branch  @relation(fields: [branchId], references: [id])
+  product       Product @relation(fields: [productId], references: [id])
+  createdByUser User    @relation(fields: [createdByUserId], references: [id])
+
+  @@index([tenantId])
+  @@index([branchId])
+  @@index([productId])
+  @@index([createdByUserId])
+}

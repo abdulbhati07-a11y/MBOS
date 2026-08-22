@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  // prisma.config.ts lives at the backend root, outside src/. Including it in
+  // the build pulls the inferred rootDir up to backend/, nesting the app under
+  // dist/src/ and breaking `node dist/main`. It is a CLI config, run by the
+  // Prisma CLI (not bundled into the app), so exclude it from the Nest build.
+  "exclude": ["node_modules", "test", "dist", "prisma.config.ts", "**/*spec.ts"]
+}
