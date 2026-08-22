@@ -5,6 +5,7 @@ import request from 'supertest';
 import { AppModule } from '../app.module';
 import { ApiExceptionFilter } from '../common/filters/http-exception.filter';
 import { PrismaService } from '../prisma/prisma.service';
+import { RateLimitConfig } from '../rate-limit/rate-limit.config';
 import { REFRESH_COOKIE } from './auth.controller';
 import { CurrentUserResponse } from './dto/auth-response.dto';
 import { TokenService } from './token.service';
@@ -69,7 +70,19 @@ describe('AuthController (e2e)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      // This suite logs in a dozen times from one address. Rate limiting is a
+      // separate concern with its own coverage in access-control.e2e.spec.ts, so
+      // switching it off here keeps these assertions about auth and stops the
+      // suite from becoming sensitive to the DEBT-013 thresholds.
+      .overrideProvider(RateLimitConfig)
+      .useValue({
+        enabled: false,
+        authIpLimit: 0,
+        globalIpLimit: 0,
+        tenantLimit: 0,
+      })
+      .compile();
 
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api/v1');

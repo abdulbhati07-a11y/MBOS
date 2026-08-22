@@ -20,7 +20,10 @@ describe('tenant scope extension', () => {
   const sku = `TEST-${randomUUID().slice(0, 8)}`;
 
   const asTenant = <T>(tenantId: string, fn: () => Promise<T>): Promise<T> =>
-    context.run({ tenantId, userId: randomUUID(), role: 'Owner' }, fn);
+    context.run(
+      { tenantId, userId: randomUUID(), roleId: randomUUID(), role: 'Owner' },
+      fn,
+    );
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({

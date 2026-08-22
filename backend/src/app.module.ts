@@ -1,9 +1,11 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AccessControlModule } from './access-control/access-control.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
 
@@ -16,6 +18,12 @@ import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
     // queries, so it must be available before PrismaModule.
     TenancyModule,
     PrismaModule,
+    // Chain steps 2, 5 and 6. Imported here as well as by AuthModule so the
+    // rate limiter and access-control guards are singletons shared by every
+    // feature module, not re-instantiated per importer — the rate limiter's
+    // counters are in-process state and must not be duplicated.
+    RateLimitModule,
+    AccessControlModule,
     AuthModule,
   ],
   controllers: [AppController],

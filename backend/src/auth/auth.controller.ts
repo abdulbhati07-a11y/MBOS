@@ -10,7 +10,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Request, Response } from 'express';
+import { NoModuleRequired } from '../access-control/access-control.decorators';
 import { Public } from '../common/decorators/public.decorator';
+import { StrictRateLimit } from '../rate-limit/rate-limit.decorator';
 import { AuthService, AuthenticatedSession } from './auth.service';
 import {
   AccessTokenResponse,
@@ -35,6 +37,7 @@ export class AuthController {
   }
 
   @Public()
+  @StrictRateLimit()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -49,6 +52,7 @@ export class AuthController {
   }
 
   @Public()
+  @StrictRateLimit()
   @Post('mfa/verify')
   @HttpCode(HttpStatus.OK)
   async verifyMfa(
@@ -81,7 +85,15 @@ export class AuthController {
     res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
   }
 
-  /** Authenticated — the only endpoint in 6.3 that is not @Public. */
+  /**
+   * Authenticated — the only endpoint in 6.3 that is not @Public.
+   *
+   * @NoModuleRequired because it returns the caller's own identity and role and
+   * belongs to no business module. It is also the endpoint the frontend calls to
+   * discover what it may do (DEBT-006), so gating it behind a permission would be
+   * circular.
+   */
+  @NoModuleRequired()
   @Get('me')
   async me(): Promise<CurrentUserResponse> {
     return this.auth.currentUser();

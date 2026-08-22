@@ -13,6 +13,13 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export interface TenantContext {
   tenantId: string;
   userId: string;
+  /**
+   * The role's primary key — what the permission guard (chain step 6) looks
+   * RolePermission rows up by. Required, not optional: authorization must never
+   * silently fall back to "no roleId, so skip the check", and making the
+   * compiler demand it at every construction site is what guarantees that.
+   */
+  roleId: string;
   role: string;
 }
 

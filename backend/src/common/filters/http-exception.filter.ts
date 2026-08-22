@@ -38,6 +38,7 @@ const CODE_BY_STATUS: Readonly<Record<number, string>> = {
  * rather than cast at each comparison site.
  */
 const VALIDATION_STATUS: number = HttpStatus.UNPROCESSABLE_ENTITY;
+const RATE_LIMITED_STATUS: number = HttpStatus.TOO_MANY_REQUESTS;
 
 /**
  * Renders every error in the single envelope Section 6.1 mandates:
@@ -81,6 +82,16 @@ export class ApiExceptionFilter implements ExceptionFilter {
       }
     }
 
+    if (status === RATE_LIMITED_STATUS) {
+      const retryAfter = extractRetryAfter(payload);
+      if (retryAfter !== undefined) {
+        // Both, per Section 6.1: the header because RFC 9110 requires it, and
+        // the body field for clients that only read JSON.
+        response.setHeader('Retry-After', String(retryAfter));
+        body.error.retryAfter = retryAfter;
+      }
+    }
+
     response.status(status).json(body);
   }
 }
@@ -93,6 +104,20 @@ function extractMessage(payload: unknown, fallback: string): string {
     if (Array.isArray(message)) return 'Request validation failed.';
   }
   return fallback;
+}
+
+/**
+ * Pulls the retry hint out of a 429 payload. RateLimitGuard puts it there rather
+ * than setting the header itself, so that every error — whatever throws it —
+ * still leaves this filter as the single place the wire format is decided.
+ */
+function extractRetryAfter(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const retryAfter = (payload as { retryAfter?: unknown }).retryAfter;
+  if (typeof retryAfter !== 'number' || !Number.isFinite(retryAfter)) {
+    return undefined;
+  }
+  return Math.max(0, Math.ceil(retryAfter));
 }
 
 /**

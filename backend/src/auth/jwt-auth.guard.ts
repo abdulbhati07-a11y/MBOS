@@ -49,6 +49,7 @@ export class JwtAuthGuard implements CanActivate {
     this.tenantContext.set({
       tenantId: claims.tenantId,
       userId: claims.sub,
+      roleId: claims.roleId,
       role: claims.roleName,
     });
 
