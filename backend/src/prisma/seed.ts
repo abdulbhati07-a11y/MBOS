@@ -10,56 +10,39 @@
  * Everything here is idempotent (upserts keyed on the natural unique columns),
  * so re-running after a schema change is safe. It writes on the raw client, not
  * PrismaService.db — there is no request and therefore no tenant context.
+ *
+ * The permission matrix and module list are NOT defined here: they live in
+ * ../access-control/access-control.constants.ts, which the permission and
+ * module-access guards read from too, so enforcement and seed data cannot
+ * disagree.
+ *
+ * This seed is *authoritative*, not merely additive. For the three built-in
+ * roles it both inserts what the canonical matrix grants and deletes what it
+ * does not — an upsert-only seed can never revoke a permission, and the database
+ * currently holds surplus grants from before the matrix was reconciled (see the
+ * header of access-control.constants.ts). Custom roles (DEBT-007) are tenant
+ * data and are never touched.
  */
 import { PrismaPg } from '@prisma/adapter-pg';
 import { hash } from 'bcryptjs';
 import { config as loadEnv } from 'dotenv';
+import {
+  DEV_TENANT_ENABLED_MODULES,
+  ROLE_MATRIX,
+  flattenRoleMatrix,
+} from '../access-control/access-control.constants';
 import { PrismaClient } from '../generated/prisma/client';
 
 loadEnv();
-
-/** Matches the frontend Modules enum. */
-const MODULES = [
-  'sales',
-  'inventory',
-  'customers',
-  'purchases',
-  'reports',
-  'settings',
-  'billing',
-] as const;
-
-type Action = 'read' | 'write' | 'delete' | 'refund';
-
-/**
- * Backend of DEFAULT_ROLE_PERMISSIONS (Section 5.3). Owner is unrestricted;
- * Manager runs operations but cannot touch billing; Cashier is point-of-sale
- * only and cannot issue refunds (BR-03 requires `sales.refund`).
- */
-const ROLE_MATRIX: Record<string, Partial<Record<string, Action[]>>> = {
-  Owner: Object.fromEntries(
-    MODULES.map((m) => [m, ['read', 'write', 'delete', 'refund'] as Action[]]),
-  ),
-  Manager: {
-    sales: ['read', 'write', 'refund'],
-    inventory: ['read', 'write', 'delete'],
-    customers: ['read', 'write', 'delete'],
-    purchases: ['read', 'write', 'delete'],
-    reports: ['read'],
-    settings: ['read', 'write'],
-  },
-  Cashier: {
-    sales: ['read', 'write'],
-    inventory: ['read'],
-    customers: ['read', 'write'],
-    reports: ['read'],
-  },
-};
 
 const DEV_TENANT_SLUG = 'dev';
 const DEV_USER_EMAIL = 'owner@dev.local';
 /** Dev-only credential. The database this points at is disposable (C-05). */
 const DEV_USER_PASSWORD = 'DevPassw0rd!';
+
+/** Stable key for a permission row, used to diff desired against actual. */
+const permissionKey = (module: string, action: string): string =>
+  `${module}:${action}`;
 
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
@@ -72,8 +55,9 @@ async function main(): Promise<void> {
 
   try {
     const roleIds = new Map<string, string>();
+    const triples = flattenRoleMatrix();
 
-    for (const [roleName, grants] of Object.entries(ROLE_MATRIX)) {
+    for (const roleName of Object.keys(ROLE_MATRIX)) {
       // Global built-ins have tenantId = null (Section 5.3). A compound unique
       // containing NULL never matches in SQL, so upsert cannot target it —
       // hence find-then-create rather than a single statement.
@@ -85,29 +69,53 @@ async function main(): Promise<void> {
           data: { name: roleName, isBuiltIn: true },
         }));
       roleIds.set(roleName, role.id);
+    }
 
-      for (const [moduleKey, actions] of Object.entries(grants)) {
-        for (const action of actions ?? []) {
-          await prisma.rolePermission.upsert({
-            where: {
-              roleId_module_action: {
-                roleId: role.id,
-                module: moduleKey,
-                action,
-              },
-            },
-            update: { granted: true },
-            create: {
-              roleId: role.id,
-              module: moduleKey,
-              action,
-              granted: true,
-            },
-          });
-        }
+    for (const { roleName, module, action } of triples) {
+      const roleId = roleIds.get(roleName);
+      if (!roleId) throw new Error(`Role ${roleName} was not seeded`);
+
+      await prisma.rolePermission.upsert({
+        where: { roleId_module_action: { roleId, module, action } },
+        update: { granted: true },
+        create: { roleId, module, action, granted: true },
+      });
+    }
+
+    // Prune. Anything present for a built-in role but absent from the canonical
+    // matrix is a grant the spec does not allow, so it must go rather than be
+    // left for the permission guard to honour.
+    let pruned = 0;
+    for (const [roleName, roleId] of roleIds) {
+      const desired = new Set(
+        triples
+          .filter((triple) => triple.roleName === roleName)
+          .map((triple) => permissionKey(triple.module, triple.action)),
+      );
+
+      const existing = await prisma.rolePermission.findMany({
+        where: { roleId },
+        select: { id: true, module: true, action: true },
+      });
+      const surplusIds = existing
+        .filter((row) => !desired.has(permissionKey(row.module, row.action)))
+        .map((row) => row.id);
+
+      if (surplusIds.length > 0) {
+        await prisma.rolePermission.deleteMany({
+          where: { id: { in: surplusIds } },
+        });
+        pruned += surplusIds.length;
+        console.log(
+          `Pruned ${surplusIds.length} non-canonical permission(s) from ${roleName}.`,
+        );
       }
     }
-    console.log(`Seeded ${roleIds.size} built-in roles with permissions.`);
+
+    console.log(
+      `Seeded ${roleIds.size} built-in roles with ${triples.length} ` +
+        `permissions (${pruned} pruned).`,
+    );
 
     const tenant = await prisma.tenant.upsert({
       where: { slug: DEV_TENANT_SLUG },
@@ -132,15 +140,35 @@ async function main(): Promise<void> {
       });
     }
 
-    // Every module enabled: TenantModuleSubscription is the sole authority for
-    // module access (D-03), so an empty set would 403 every route.
-    for (const moduleKey of MODULES) {
+    // TenantModuleSubscription is the sole authority for module access (D-03),
+    // so this list decides what the dev tenant can reach. The industry modules
+    // are intentionally left unsubscribed — see DEV_TENANT_ENABLED_MODULES.
+    for (const moduleKey of DEV_TENANT_ENABLED_MODULES) {
       await prisma.tenantModuleSubscription.upsert({
         where: { tenantId_moduleKey: { tenantId: tenant.id, moduleKey } },
         update: { disabledAt: null },
         create: { tenantId: tenant.id, moduleKey },
       });
     }
+
+    // Authoritative in the other direction too: a module previously enabled but
+    // no longer on the list is disabled, so re-seeding is deterministic instead
+    // of leaving whatever an earlier run happened to switch on.
+    const staleSubscriptions = await prisma.tenantModuleSubscription.updateMany(
+      {
+        where: {
+          tenantId: tenant.id,
+          moduleKey: { notIn: [...DEV_TENANT_ENABLED_MODULES] },
+          disabledAt: null,
+        },
+        data: { disabledAt: new Date() },
+      },
+    );
+
+    console.log(
+      `Enabled ${DEV_TENANT_ENABLED_MODULES.length} module(s) for tenant ` +
+        `"${DEV_TENANT_SLUG}" (${staleSubscriptions.count} disabled).`,
+    );
 
     const ownerRoleId = roleIds.get('Owner');
     if (!ownerRoleId) throw new Error('Owner role was not seeded');
