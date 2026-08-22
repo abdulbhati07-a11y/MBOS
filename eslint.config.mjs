@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The NestJS backend is a separate TS project with its own tsconfig and
+    // eslint config (backend/eslint.config.mjs). It must not be linted or
+    // type-checked by the frontend toolchain — Nest's decorators require
+    // experimentalDecorators, which the frontend tsconfig does not set.
+    "backend/**",
   ]),
 ]);
 
