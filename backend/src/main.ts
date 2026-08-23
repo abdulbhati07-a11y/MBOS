@@ -1,4 +1,3 @@
-import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -6,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/filters/http-exception.filter';
+import { ApiValidationPipe } from './common/pipes/api-validation.pipe';
 
 /** Where the Next.js dev server runs, used when CORS_ORIGIN is unset. */
 const DEFAULT_CORS_ORIGIN = 'http://localhost:3000';
@@ -50,16 +50,7 @@ async function bootstrap(): Promise<void> {
   // Refresh tokens travel as an httpOnly cookie (Section 6.3).
   app.use(cookieParser());
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      // 422, not the default 400: Section 6.1 reserves 400 for malformed
-      // bodies and 422 for bodies that parse but fail validation.
-      errorHttpStatusCode: 422,
-    }),
-  );
+  app.useGlobalPipes(new ApiValidationPipe());
 
   app.useGlobalFilters(new ApiExceptionFilter());
 
