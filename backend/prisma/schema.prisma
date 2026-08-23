@@ -116,6 +116,7 @@ model User {
   tenant               Tenant                @relation(fields: [tenantId], references: [id])
   role                 Role                  @relation(fields: [roleId], references: [id])
   refreshTokens        RefreshToken[]
+  passwordResetTokens  PasswordResetToken[]
   refundTransactions   RefundTransaction[]
   poStatusTransitions  POStatusTransition[]
   stockAdjustments     StockAdjustment[]
@@ -132,6 +133,24 @@ model RefreshToken {
   expiresAt  DateTime
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Single-use password-reset token (DEBT-015). Only the hash is stored, never
+/// the token itself — the same posture as RefreshToken. `usedAt` is stamped when
+/// the token is redeemed so it cannot be replayed; `expiresAt` bounds its life.
+/// Not tenant-scoped: reset begins from an email alone, before any tenant
+/// context exists, so it is looked up by tokenHash on the unscoped client.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
