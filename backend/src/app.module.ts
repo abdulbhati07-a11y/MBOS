@@ -4,6 +4,8 @@ import { AccessControlModule } from './access-control/access-control.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
+import { MailModule } from './mail/mail.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { TenancyModule } from './tenancy/tenancy.module';
@@ -18,6 +20,11 @@ import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
     // queries, so it must be available before PrismaModule.
     TenancyModule,
     PrismaModule,
+    // Binds MAIL_PROVIDER to the no-op ConsoleMailProvider until a transport is
+    // chosen (DEBT-015). @Global, so no feature module needs to import it to
+    // inject the token. No wired consumers yet — the stub exists so password
+    // reset can be built the moment a provider is selected.
+    MailModule,
     // Chain steps 2, 5 and 6. Imported here as well as by AuthModule so the
     // rate limiter and access-control guards are singletons shared by every
     // feature module, not re-instantiated per importer — the rate limiter's
@@ -25,6 +32,10 @@ import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
     RateLimitModule,
     AccessControlModule,
     AuthModule,
+    // Section 6.10 — the write side of the module gating that step 5 enforces
+    // on read. Imported after AuthModule so the global guard is registered
+    // before these controllers' routes are mapped.
+    BillingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
