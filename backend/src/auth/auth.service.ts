@@ -38,6 +38,11 @@ export class AuthService {
   /**
    * Section 6.3 POST /auth/login.
    *
+   * Tenant resolution is by email alone (DEBT-014, resolved). D-01 holds that
+   * one user belongs to exactly one tenant, so an email identifies its tenant
+   * without the caller naming it — there is no tenantSlug in the request, and the
+   * login form stays a plain email+password.
+   *
    * Runs on the unscoped client by design: the tenant is a *result* of
    * authentication, so there is no context to scope by yet.
    */
@@ -47,13 +52,15 @@ export class AuthService {
         email: dto.email,
         deletedAt: null,
         isActive: true,
-        ...(dto.tenantSlug ? { tenant: { slug: dto.tenantSlug } } : {}),
       },
       include: { role: true, tenant: true },
     });
 
-    // Zero matches and an ambiguous match are both reported as bad credentials:
-    // saying "which tenant?" would confirm the address exists (DEBT-014).
+    // Under D-01 this is 0 or 1 row. The "exactly one" guard is kept as
+    // fail-closed defence: were the (tenantId, email) uniqueness ever breached so
+    // one address spanned two tenants, logging in would be refused rather than
+    // signing the wrong tenant in. Zero and ambiguous both read as bad
+    // credentials — saying "which tenant?" would confirm the address exists.
     if (candidates.length !== 1) {
       await this.passwords.verifyDecoy(dto.password);
       throw new UnauthorizedException('Invalid email or password');
