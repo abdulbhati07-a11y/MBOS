@@ -170,11 +170,12 @@ model PasswordResetToken {
 /// Custom roles (DEBT-007) have a real tenantId and isBuiltIn = false.
 /// Seeded at DB init: Owner, Manager, Cashier (tenantId null).
 model Role {
-  id        String   @id @default(uuid())
-  tenantId  String?  // nullable — null = global built-in
+  id        String    @id @default(uuid())
+  tenantId  String?   // nullable — null = global built-in
   name      String
-  isBuiltIn Boolean  @default(false)
-  createdAt DateTime @default(now())
+  isBuiltIn Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  deletedAt DateTime? // custom roles only; built-ins are never deleted (D-02)
 
   permissions RolePermission[]
   users       User[]

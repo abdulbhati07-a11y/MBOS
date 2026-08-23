@@ -185,6 +185,25 @@ export interface PermissionTriple {
 }
 
 /**
+ * Every (module, action) pair that can meaningfully be granted — the grid a
+ * permissions editor renders and `GET /roles/:id/permissions` enumerates.
+ *
+ * `refund` is deliberately Sales-only. Per BR-03 a refund is a reversing
+ * financial transaction, which exists for orders and nowhere else, so
+ * `inventory.refund` is not a permission a tenant has merely denied — it is not a
+ * permission at all. Emitting it as `granted: false` would invite a UI to render a
+ * checkbox that can never mean anything.
+ */
+export const PERMISSION_GRID: readonly {
+  module: ModuleKey;
+  action: Action;
+}[] = MODULE_KEYS.flatMap((module) =>
+  ACTIONS.filter((action) => action !== 'refund' || module === 'sales').map(
+    (action) => ({ module, action }),
+  ),
+);
+
+/**
  * The plan catalogue, seeded as development scaffolding.
  *
  * Values are taken from the Section 6.10 `GET /plans` example verbatim rather
