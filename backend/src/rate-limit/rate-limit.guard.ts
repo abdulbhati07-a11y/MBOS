@@ -93,12 +93,13 @@ export class RateLimitGuard {
 /**
  * The address the limit is keyed on.
  *
- * OPERATIONAL NOTE: `req.ip` is the socket address unless Express is configured
- * with `trust proxy`. Behind a load balancer without it, every request appears to
- * come from the balancer and one noisy client would throttle all tenants at once;
- * with it set too permissively, a client can forge X-Forwarded-For and evade the
- * limit entirely. Neither failure is acceptable, and Sections 4-6 do not specify
- * the deployment topology — recorded in DEBT-013 alongside the thresholds.
+ * `req.ip` is the socket address unless Express is configured with `trust proxy`.
+ * That setting is now driven by the TRUST_PROXY env var in main.ts (DEBT-013,
+ * resolved): off by default so a forged X-Forwarded-For is ignored, and set to
+ * the reverse proxy's IP/CIDR (never the blanket `true`, which main.ts refuses)
+ * in front of a load balancer so `req.ip` is the real client without being
+ * spoofable. This function therefore trusts `req.ip` as configured and only
+ * falls back to the raw socket address or a sentinel when it is somehow absent.
  */
 function clientIp(request: Request): string {
   return request.ip ?? request.socket.remoteAddress ?? 'unknown';
