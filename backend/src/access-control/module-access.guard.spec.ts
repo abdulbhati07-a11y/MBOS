@@ -26,13 +26,22 @@ describe('ModuleAccessGuard', () => {
     guard = new ModuleAccessGuard(prisma, context);
   });
 
-  it('allows a module with an enabled subscription', async () => {
+  it('allows an industry module with an enabled subscription', async () => {
     findFirst.mockResolvedValue({ disabledAt: null });
 
-    await expect(guard.assertModuleEnabled('sales')).resolves.toBeUndefined();
+    await expect(
+      guard.assertModuleEnabled('pharmacy'),
+    ).resolves.toBeUndefined();
   });
 
-  it('rejects a module with no subscription row', async () => {
+  it('allows a core module without consulting the subscription table', async () => {
+    // DEBT-016: core modules are RBAC-only and never carry a subscription row,
+    // so the guard must not query for one — the permission check alone gates them.
+    await expect(guard.assertModuleEnabled('sales')).resolves.toBeUndefined();
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects an industry module with no subscription row', async () => {
     findFirst.mockResolvedValue(null);
 
     await expect(guard.assertModuleEnabled('clinic')).rejects.toThrow(
@@ -40,12 +49,12 @@ describe('ModuleAccessGuard', () => {
     );
   });
 
-  it('rejects a module whose subscription has been disabled', async () => {
+  it('rejects an industry module whose subscription has been disabled', async () => {
     // The other half of Section 6.2's condition: the row survives so billing
     // history is preserved, but disabledAt makes it inaccessible.
     findFirst.mockResolvedValue({ disabledAt: new Date() });
 
-    await expect(guard.assertModuleEnabled('reports')).rejects.toThrow(
+    await expect(guard.assertModuleEnabled('restaurant')).rejects.toThrow(
       ForbiddenException,
     );
   });
@@ -53,12 +62,12 @@ describe('ModuleAccessGuard', () => {
   it('queries by moduleKey alone and lets the extension inject tenantId', async () => {
     findFirst.mockResolvedValue({ disabledAt: null });
 
-    await guard.assertModuleEnabled('sales');
+    await guard.assertModuleEnabled('pharmacy');
 
     // Passing tenantId here would be redundant at best; the point of the scoped
     // client is that the caller cannot choose the tenant.
     expect(findFirst).toHaveBeenCalledWith({
-      where: { moduleKey: 'sales' },
+      where: { moduleKey: 'pharmacy' },
       select: { disabledAt: true },
     });
   });
@@ -68,6 +77,7 @@ describe('ModuleAccessGuard', () => {
 
     // Not a ForbiddenException: running out of order is a wiring bug, and it
     // should surface as a 500 with a log rather than look like a normal denial.
+    // Checked before the core short-circuit, so it fires even for `sales`.
     await expect(guard.assertModuleEnabled('sales')).rejects.toThrow(
       /before the tenant context was bound/,
     );

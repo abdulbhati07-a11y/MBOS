@@ -20,8 +20,16 @@
  * the database by the seed (see prisma/seed.ts).
  *
  * Mirroring by hand is itself a hazard — the two files can drift again silently.
- * DEBT-016 records that this list should be generated from the frontend enum
- * rather than duplicated, and that `billing` currently exists only on this side.
+ * Until the taxonomy lives in one shared source both layers import (a monorepo
+ * change tracked in DEBT-016), `module-taxonomy.contract.spec.ts` asserts that
+ * this list and the frontend `Modules` enum still agree, so drift fails a test
+ * rather than reaching production. `billing` is the one key that exists only on
+ * this side (there is no billing UI yet), and the contract test encodes exactly
+ * that exception.
+ *
+ * Module keys split into two classes with different gating (DEBT-016/DEBT-018):
+ * core modules are always available and gated by RBAC only, industry modules are
+ * the only ones that go through TenantModuleSubscription. See INDUSTRY_MODULE_KEYS.
  */
 
 /**
@@ -46,6 +54,46 @@ export const MODULE_KEYS = [
 ] as const;
 
 export type ModuleKey = (typeof MODULE_KEYS)[number];
+
+/**
+ * Industry modules — the ONLY modules that are subscription-gated (DEBT-016).
+ *
+ * The product decision: a tenant subscribes to, and can be charged for, the
+ * vertical add-ons only. `TenantModuleSubscription` therefore holds a row for an
+ * industry module and never for a core one — the module-access guard consults
+ * the table for these keys and short-circuits to "allowed" for every other key.
+ *
+ * These three are named explicitly rather than derived, because "which modules
+ * cost extra" is a product statement, not something to infer. A future vertical
+ * (e.g. `salon`) becomes gated by being added here.
+ */
+export const INDUSTRY_MODULE_KEYS = [
+  'clinic',
+  'pharmacy',
+  'restaurant',
+] as const satisfies readonly ModuleKey[];
+
+/**
+ * Core modules — everything that is not an industry add-on. Gated by RBAC only
+ * (the role→permission matrix), never by a subscription row: a tenant always has
+ * them, so there is no `TenantModuleSubscription` row for a core module, ever
+ * (DEBT-016, DEBT-018). Derived from MODULE_KEYS so a newly added key is core —
+ * i.e. always available — unless it is deliberately listed as industry above.
+ */
+export const CORE_MODULE_KEYS = MODULE_KEYS.filter(
+  (moduleKey): moduleKey is ModuleKey =>
+    !INDUSTRY_MODULE_KEYS.includes(moduleKey as (typeof INDUSTRY_MODULE_KEYS)[number]),
+);
+
+/**
+ * Whether a module is subscription-gated (industry) rather than always-on
+ * (core). The single predicate both the module-access guard and the billing
+ * service branch on, so "core is RBAC-only, industry goes through
+ * TenantModuleSubscription" is stated in exactly one place.
+ */
+export function isIndustryModule(moduleKey: ModuleKey): boolean {
+  return (INDUSTRY_MODULE_KEYS as readonly ModuleKey[]).includes(moduleKey);
+}
 
 /**
  * The frontend `Actions` enum verbatim. `refund` is Sales-scoped and separate
@@ -117,25 +165,17 @@ export const ROLE_MATRIX: Readonly<Record<string, RoleGrants>> = {
 };
 
 /**
- * Modules the development tenant subscribes to.
+ * Industry modules the development tenant subscribes to — deliberately none.
  *
- * The industry modules (clinic/pharmacy/restaurant) are deliberately excluded.
- * `TenantModuleSubscription` is the sole authority for module access (D-03) and
- * an absent row means "not enabled", so this leaves a genuinely unsubscribed
- * module for the module-access guard's 403 path to be tested against — without
- * mutating subscription rows mid-test and without writing business data into the
- * shared dev database (C-05).
+ * Only industry modules are ever present in `TenantModuleSubscription`
+ * (DEBT-016). Leaving all three unsubscribed keeps a genuinely gated module for
+ * the module-access guard's 403 path to be tested against, without mutating
+ * subscription rows mid-test or writing business data into the shared dev
+ * database (C-05). Core modules are RBAC-only and never appear in the table at
+ * all, so they are not listed here — the seed removes any core row a previous
+ * run may have written. Add an industry key here to switch it on for dev.
  */
-export const DEV_TENANT_ENABLED_MODULES: readonly ModuleKey[] = [
-  'dashboard',
-  'inventory',
-  'sales',
-  'customers',
-  'purchases',
-  'reports',
-  'settings',
-  'billing',
-];
+export const DEV_TENANT_ENABLED_INDUSTRY_MODULES: readonly ModuleKey[] = [];
 
 /** One (roleName, module, action) triple per granted permission. */
 export interface PermissionTriple {
@@ -143,6 +183,55 @@ export interface PermissionTriple {
   module: ModuleKey;
   action: Action;
 }
+
+/**
+ * The plan catalogue, seeded as development scaffolding.
+ *
+ * Values are taken from the Section 6.10 `GET /plans` example verbatim rather
+ * than invented (Starter at 1900 cents, Growth at 4900, with those exact module
+ * lists). Plans are global — not tenant data — and Section 6.13 assigns plan
+ * CRUD to the super-tenant admin API in Section 10, so there is no endpoint that
+ * creates them; seeding is the only way they exist for development.
+ *
+ * `modules` here is informational: it describes what a plan includes at
+ * onboarding. It never grants access — TenantModuleSubscription is the sole
+ * authority for that (D-03).
+ */
+export const SEED_PLANS: readonly {
+  name: string;
+  description: string;
+  priceMonthlyCents: number;
+  priceAnnualCents: number;
+  modules: readonly ModuleKey[];
+}[] = [
+  {
+    name: 'Starter',
+    description: 'Core retail operations for a single location.',
+    priceMonthlyCents: 1900,
+    // Ten months for the price of twelve, the usual annual discount shape.
+    priceAnnualCents: 19_000,
+    modules: ['dashboard', 'inventory', 'sales', 'customers'],
+  },
+  {
+    name: 'Growth',
+    description: 'Adds purchasing, reporting and configuration.',
+    priceMonthlyCents: 4900,
+    priceAnnualCents: 49_000,
+    modules: [
+      'dashboard',
+      'inventory',
+      'sales',
+      'customers',
+      'purchases',
+      'reports',
+      'settings',
+      'billing',
+    ],
+  },
+];
+
+/** Which plan the development tenant is subscribed to. */
+export const DEV_TENANT_PLAN_NAME = 'Growth';
 
 /**
  * Flattens ROLE_MATRIX into the rows `RolePermission` stores. The seed uses this

@@ -1,15 +1,20 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
-import { ModuleKey } from './access-control.constants';
+import { ModuleKey, isIndustryModule } from './access-control.constants';
 
 /**
  * Step 5 of the middleware chain (Section 6.2) — module access, FR-BILL-03.
  *
- * `TenantModuleSubscription` is the sole authority for whether a module is
- * available to a tenant (D-03); `Plan` and `PlanModule` are billing convenience
- * and are never consulted here. A module is enabled only if a row exists AND its
- * `disabledAt` is null.
+ * `TenantModuleSubscription` is the sole authority for whether an *industry*
+ * module is available to a tenant (D-03); `Plan` and `PlanModule` are billing
+ * convenience and are never consulted here. An industry module is enabled only
+ * if a row exists AND its `disabledAt` is null.
+ *
+ * Core modules are not subscription-gated at all (DEBT-016): they are gated by
+ * RBAC only (chain step 6), always available, and never have a row in
+ * `TenantModuleSubscription`. This guard short-circuits to "allowed" for them so
+ * the permission check alone decides access.
  *
  * The check runs on every request rather than being cached or resolved at login,
  * because FR-BILL-03 requires exactly that and UC-04 requires a disable to take
@@ -26,12 +31,20 @@ export class ModuleAccessGuard {
   async assertModuleEnabled(moduleKey: ModuleKey): Promise<void> {
     // Defence in depth: this guard is invoked by ApiAccessGuard after the auth
     // guard has bound the context. If it ever runs earlier, fail loudly rather
-    // than querying without a tenant.
+    // than querying without a tenant. Checked before the core short-circuit so
+    // the invariant holds for every route, core or industry.
     if (!this.tenantContext.getTenantId()) {
       throw new Error(
         'ModuleAccessGuard ran before the tenant context was bound. It must ' +
           'be invoked after the auth guard (chain steps 3-4).',
       );
+    }
+
+    // Core modules are RBAC-only (DEBT-016): always available, never carry a
+    // subscription row, so there is nothing to look up. The permission guard
+    // (step 6) is the only gate for them.
+    if (!isIndustryModule(moduleKey)) {
+      return;
     }
 
     // The tenant-scoped client: TenantModuleSubscription is in SCOPED_MODELS, so

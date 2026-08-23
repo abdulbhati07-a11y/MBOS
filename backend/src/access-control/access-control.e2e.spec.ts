@@ -269,15 +269,20 @@ describe('Access control (e2e)', () => {
   });
 
   describe('step 5 — module access', () => {
-    it('allows a subscribed module', async () => {
+    it('allows a core module with no subscription row', async () => {
+      // sales is a core module (DEBT-016): RBAC-only, never subscribed, and the
+      // seed leaves it with no TenantModuleSubscription row at all. Reaching it
+      // proves the guard's core short-circuit — access without a row, decided by
+      // step 6 alone.
       await get('/api/v1/test-access/sales-read')
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
     });
 
-    it('refuses an unsubscribed module even when the role has the permission', async () => {
-      // Owner holds clinic.read in the canonical matrix, so only the missing
-      // TenantModuleSubscription row can be refusing this — step 5 in isolation.
+    it('refuses an unsubscribed industry module even when the role has the permission', async () => {
+      // Owner holds clinic.read in the canonical matrix, and clinic is an
+      // industry module, so only the missing TenantModuleSubscription row can be
+      // refusing this — step 5's industry path in isolation.
       const res = await get('/api/v1/test-access/clinic-read')
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(403);
@@ -294,7 +299,7 @@ describe('Access control (e2e)', () => {
 
     it('refuses sales.refund to a Cashier while sales.read is allowed', async () => {
       // BR-03: refund is its own action, deliberately not implied by write.
-      // The Sales module IS enabled, so this is step 6 in isolation.
+      // Sales is a core module — always available — so this isolates step 6.
       const res = await post('/api/v1/test-access/sales-refund')
         .set('Authorization', `Bearer ${cashierToken}`)
         .expect(403);

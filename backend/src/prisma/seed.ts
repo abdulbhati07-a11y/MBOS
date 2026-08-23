@@ -27,8 +27,10 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { hash } from 'bcryptjs';
 import { config as loadEnv } from 'dotenv';
 import {
-  DEV_TENANT_ENABLED_MODULES,
+  DEV_TENANT_ENABLED_INDUSTRY_MODULES,
+  DEV_TENANT_PLAN_NAME,
   ROLE_MATRIX,
+  SEED_PLANS,
   flattenRoleMatrix,
 } from '../access-control/access-control.constants';
 import { PrismaClient } from '../generated/prisma/client';
@@ -140,38 +142,93 @@ async function main(): Promise<void> {
       });
     }
 
-    // TenantModuleSubscription is the sole authority for module access (D-03),
-    // so this list decides what the dev tenant can reach. The industry modules
-    // are intentionally left unsubscribed — see DEV_TENANT_ENABLED_MODULES.
-    for (const moduleKey of DEV_TENANT_ENABLED_MODULES) {
-      await prisma.tenantModuleSubscription.upsert({
-        where: { tenantId_moduleKey: { tenantId: tenant.id, moduleKey } },
-        update: { disabledAt: null },
-        create: { tenantId: tenant.id, moduleKey },
+    // TenantModuleSubscription holds a row ONLY for an industry module
+    // (DEBT-016): core modules are RBAC-only, always available, and must never
+    // appear in this table — the module-access guard treats a core key as
+    // allowed without ever looking here. So the seed is authoritative by
+    // physical presence, not by a disabledAt flag: it deletes every row for the
+    // tenant, then recreates one per subscribed industry module. A core row left
+    // behind by an older seed (which used to enable dashboard/inventory/… here)
+    // is therefore removed outright rather than merely disabled.
+    await prisma.tenantModuleSubscription.deleteMany({
+      where: { tenantId: tenant.id },
+    });
+    for (const moduleKey of DEV_TENANT_ENABLED_INDUSTRY_MODULES) {
+      await prisma.tenantModuleSubscription.create({
+        data: { tenantId: tenant.id, moduleKey },
       });
     }
 
-    // Authoritative in the other direction too: a module previously enabled but
-    // no longer on the list is disabled, so re-seeding is deterministic instead
-    // of leaving whatever an earlier run happened to switch on.
-    const staleSubscriptions = await prisma.tenantModuleSubscription.updateMany(
-      {
-        where: {
-          tenantId: tenant.id,
-          moduleKey: { notIn: [...DEV_TENANT_ENABLED_MODULES] },
-          disabledAt: null,
-        },
-        data: { disabledAt: new Date() },
-      },
-    );
-
     console.log(
-      `Enabled ${DEV_TENANT_ENABLED_MODULES.length} module(s) for tenant ` +
-        `"${DEV_TENANT_SLUG}" (${staleSubscriptions.count} disabled).`,
+      `Reset module subscriptions for tenant "${DEV_TENANT_SLUG}": ` +
+        `${DEV_TENANT_ENABLED_INDUSTRY_MODULES.length} industry module(s) ` +
+        'subscribed, all core rows removed.',
     );
 
     const ownerRoleId = roleIds.get('Owner');
     if (!ownerRoleId) throw new Error('Owner role was not seeded');
+
+    // Plan catalogue (Section 6.10 GET /plans). Global, not tenant data, and
+    // there is no endpoint that creates plans — Section 6.13 puts plan CRUD in
+    // the Section 10 super-tenant API — so the seed is the only source.
+    const planIds = new Map<string, string>();
+    for (const plan of SEED_PLANS) {
+      const record = await prisma.plan.upsert({
+        where: { name: plan.name },
+        update: {
+          description: plan.description,
+          priceMonthly: plan.priceMonthlyCents,
+          priceAnnual: plan.priceAnnualCents,
+          isActive: true,
+        },
+        create: {
+          name: plan.name,
+          description: plan.description,
+          priceMonthly: plan.priceMonthlyCents,
+          priceAnnual: plan.priceAnnualCents,
+        },
+      });
+      planIds.set(plan.name, record.id);
+
+      for (const moduleKey of plan.modules) {
+        await prisma.planModule.upsert({
+          where: {
+            planId_moduleKey: { planId: record.id, moduleKey },
+          },
+          update: {},
+          create: { planId: record.id, moduleKey },
+        });
+      }
+      // Authoritative: a module dropped from a plan's definition must not linger.
+      await prisma.planModule.deleteMany({
+        where: { planId: record.id, moduleKey: { notIn: [...plan.modules] } },
+      });
+    }
+    console.log(`Seeded ${SEED_PLANS.length} plans with their module lists.`);
+
+    // A billing record for the dev tenant, so GET /billing/subscription returns
+    // real data. Has no effect on module access — TenantModuleSubscription owns
+    // that (D-03), which is exactly what this row must not be confused with.
+    const devPlanId = planIds.get(DEV_TENANT_PLAN_NAME);
+    if (!devPlanId) {
+      throw new Error(`Plan ${DEV_TENANT_PLAN_NAME} was not seeded`);
+    }
+    const periodStart = new Date(Date.UTC(2026, 7, 1));
+    const periodEnd = new Date(Date.UTC(2026, 7, 31, 23, 59, 59));
+    await prisma.tenantSubscription.upsert({
+      where: { tenantId: tenant.id },
+      update: { planId: devPlanId, status: 'Active' },
+      create: {
+        tenantId: tenant.id,
+        planId: devPlanId,
+        status: 'Active',
+        currentPeriodStart: periodStart,
+        currentPeriodEnd: periodEnd,
+      },
+    });
+    console.log(
+      `Subscribed tenant "${DEV_TENANT_SLUG}" to the ${DEV_TENANT_PLAN_NAME} plan.`,
+    );
 
     await prisma.user.upsert({
       where: { tenantId_email: { tenantId: tenant.id, email: DEV_USER_EMAIL } },
