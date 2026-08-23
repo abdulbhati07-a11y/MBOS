@@ -316,6 +316,10 @@ export default function DashboardPage() {
                   key={action.label}
                   variant="outline"
                   className="h-auto flex flex-col items-center gap-2 py-4"
+                  // Link renders an <a>, not a native <button>. Base UI's
+                  // nativeButton defaults to true, so it must be turned off
+                  // here or it strips the button semantics it assumes.
+                  nativeButton={false}
                   render={<Link href={action.href} />}
                 >
                   <action.icon className="h-5 w-5" />
