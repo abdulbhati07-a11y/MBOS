@@ -8,6 +8,7 @@ import { BillingModule } from './billing/billing.module';
 import { MailModule } from './mail/mail.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { SettingsModule } from './settings/settings.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
 
@@ -32,6 +33,11 @@ import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
     RateLimitModule,
     AccessControlModule,
     AuthModule,
+    // Section 6.4 — settings and branches. Like BillingModule, imported after
+    // AuthModule so the global access guard is registered before these routes
+    // are mapped. Settings is the first module every session reads (the POS
+    // needs the tenant's tax rate before it can total an order — DEBT-008).
+    SettingsModule,
     // Section 6.10 — the write side of the module gating that step 5 enforces
     // on read. Imported after AuthModule so the global guard is registered
     // before these controllers' routes are mapped.

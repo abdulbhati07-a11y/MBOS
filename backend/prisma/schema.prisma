@@ -82,15 +82,20 @@ model TenantSettings {
 /// Multi-location entity. Branch Switcher in AppShell (commit 6b72ea4) backed here.
 /// Partial unique index on (tenantId) WHERE isDefault = true enforced via raw SQL
 /// in migration — Prisma does not support partial unique indexes natively.
+/// Soft-deleted via deletedAt: Order and StockAdjustment reference a Branch, and
+/// Section 5.1 requires deletedAt on anything a financial record points at (BR-03).
+/// Distinct from isActive: isActive retires a branch that must keep existing
+/// because it has history; deletedAt removes one that never accumulated any.
 model Branch {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   tenantId  String
   name      String
-  address   String   @default("")
-  isDefault Boolean  @default(false)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  address   String    @default("")
+  isDefault Boolean   @default(false)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   tenant           Tenant            @relation(fields: [tenantId], references: [id])
   orders           Order[]
