@@ -26,7 +26,12 @@ Each entry has:
 
 **Source:** `src/lib/validation/auth.ts` — the `passwordSchema` definition. Identified during Step 4 review.
 
-**Status:** Open
+**Resolved by:** `docs/section-3-users-use-cases.md` §3.3.1, which enumerates the five constraints exactly as the schema enforces them (≥8 chars; ≥1 lowercase; ≥1 uppercase; ≥1 digit; ≥1 non-alphanumeric). It additionally records two things the original entry did not ask for but which an implementer needs:
+
+1. **What is deliberately absent** — no maximum length, no character denylist, no dictionary or breach check, no rotation or history requirement. Documented so their absence reads as a decision rather than an omission.
+2. **The enforce-on-set/never-on-verify asymmetry.** `loginSchema` applies only `min(1)` to the password field, not the complexity policy. That is deliberate: validating complexity at login would lock out any user whose password predates a policy change, and would disclose the policy to an attacker probing the form. Any API-side auth implementation must preserve it.
+
+**Status:** Resolved — policy enumerated in Section 3.3.1 with the absent-constraints list and the set-vs-verify asymmetry. Related: [DEBT-015].
 
 ---
 
@@ -367,11 +372,38 @@ Section 6.10 states its endpoints require `settings.write` / `settings.read`, im
 
 Either the copy must change (baseline platform fee covering all core modules + per-module add-ons for industry modules), or — if "pay only for what you use" down to Sales/Inventory is a genuine product requirement — DEBT-016 must be reopened and those keys reclassified as gateable. The engineering decision (DEBT-016) currently wins; this item records that the business-foundation narrative has to be reconciled to it, not the other way around, unless product says otherwise.
 
-**Blocked on:** Sections 1–3 are not yet committed to the repo (see the pending "commit Sections 1–3" task), so this cannot be edited in place yet — the fix lands when Section 1.5.1 is brought into `docs/`.
+**Blocked on:** ~~Sections 1–3 are not yet committed to the repo~~ — **unblocked.** Sections 1–3 landed in `docs/` (commit "docs: commit Sections 1-3"), so Section 1.5.1 now exists as an editable file.
 
-**Source:** Section 1.5.1 pricing narrative (as quoted in the backend status-sync directive). `backend/src/access-control/access-control.constants.ts` (`CORE_MODULE_KEYS`, `INDUSTRY_MODULE_KEYS`). Raised by the DEBT-016 close. Related: [DEBT-016], [DEBT-018].
+**Source:** Section 1.5.1 pricing narrative (as quoted in the backend status-sync directive). `backend/src/access-control/access-control.constants.ts` (`CORE_MODULE_KEYS`, `INDUSTRY_MODULE_KEYS`). Raised by the DEBT-016 close. Related: [DEBT-016], [DEBT-018], [DEBT-020].
 
-**Status:** Open — documentation/product-narrative reconciliation; the code model (Core never gated) is settled, Section 1.5.1 copy is what must move. Blocked on Sections 1–3 landing in the repo.
+**Status:** Resolved — `docs/section-1-business-foundation.md` §1.5.1 retires the "pay only for what you use, including Sales/Inventory/POS" clause explicitly (marked as superseding an earlier draft, so the retirement is auditable rather than a silent rewrite) and states the reconciled model: a baseline plan fee covering all eight core modules, with the three industry modules as the only opt-in, individually billable, toggleable items. The engineering model (DEBT-016) was preserved and the narrative moved to it, which is the direction this entry prescribed. **Note:** writing §1.5.1 surfaced a second, distinct contradiction in the same area — see [DEBT-020].
+
+---
+
+### DEBT-020 — Plan tiers differentiate on core modules, which cannot be enforced
+
+**Where it needs to land:** Section 1.5.1 (packaging narrative) and Section 5 / `SEED_PLANS` (the seeded plan module lists). Requires a product decision first.
+
+**What needs to be written:** `SEED_PLANS` gives Starter the module list `[dashboard, inventory, sales, customers]` and Growth those plus `[purchases, reports, settings, billing]`. That implies Growth unlocks four modules Starter does not have. **It cannot.** Two settled decisions make plan-based module differentiation unenforceable:
+
+- **D-03** — `TenantModuleSubscription` is the *sole* access-control authority; `Plan` and `PlanModule` are billing/onboarding convenience and grant nothing.
+- **DEBT-016** — core modules are never subscription-gated; the module-access guard short-circuits every core key to "allowed" and never consults the table for them.
+
+All eight keys in both plan lists are core. So a Starter tenant hitting `purchases` or `reports` is allowed through by the guard exactly as a Growth tenant is; only their role stops them, and role assignment does not depend on plan. **Starter and Growth are therefore not enforceably different** — the difference exists only in the seeded metadata and in whatever a pricing page claims.
+
+This is *not* a restatement of DEBT-019. DEBT-019 was about marketing copy describing core modules as metered; this is about the seeded plan data implying an enforcement boundary that no code implements. Fixing the copy does not fix this.
+
+Three candidate resolutions, in decreasing order of disruption:
+
+1. **Reclassify some core keys as gateable** — reopens DEBT-016 and re-introduces the "row absent → 403" hazard for core modules that the DEBT-016 close specifically removed.
+2. **Differentiate plans on something enforceable** — seats, branches, transaction volume, or industry-module allowance. Requires new limit columns and enforcement, but leaves the module taxonomy alone.
+3. **Accept price-only tiering** and correct the seeded `modules` lists so they stop implying enforcement that does not exist — cheapest, and honest, but means Starter/Growth differ only in price and add-on allowance.
+
+**Risk if left open:** the plan lists are the most likely thing a future implementer would wire access control to, precisely because they *look* like an entitlement list. D-03 says they are not. A contract test or an explicit comment on `SEED_PLANS` would make the trap visible at the call site.
+
+**Source:** `backend/src/access-control/access-control.constants.ts` (`SEED_PLANS`, `CORE_MODULE_KEYS`), `backend/prisma/schema.prisma` (`Plan`, `PlanModule`, `TenantModuleSubscription`). Surfaced while reconstructing Section 1.5.1. Related: [DEBT-016], [DEBT-018], [DEBT-019].
+
+**Status:** Open — product decision required (which of the three options). No option adopted; §1.5.1 records all three and states that the choice is product's. Nothing in code changed on account of this entry.
 
 ---
 
