@@ -407,4 +407,62 @@ Three candidate resolutions, in decreasing order of disruption:
 
 ---
 
+### DEBT-021 — Sidebar gates industry modules on a permission, not a subscription
+
+**Where it needs to land:** `src/hooks/use-permissions.ts` (`useModuleAccess`), `src/components/shared/Sidebar.tsx`, and Section 4.5 (the frontend access-control description)
+
+**What needs to be written:** `useModuleAccess(moduleKey)` is implemented as `useCanPerform(moduleKey, Actions.READ)` — a **role-permission** check. But whether an industry module is available is a **subscription** question, answered by `TenantModuleSubscription` and nothing else (D-03, FR-BILL-03). The two are independent gates (Section 3.2), and the hook conflates them under a name that claims to answer the second.
+
+The consequence is visible today. The dev tenant subscribes to **zero** industry modules (`DEV_TENANT_ENABLED_INDUSTRY_MODULES` is deliberately empty), yet an Owner holds `clinic.read`, `pharmacy.read` and `restaurant.read` from the canonical matrix — so the sidebar renders all three. Every one of them leads to a module the API refuses with 403 at chain step 5. The frontend advertises what the backend denies.
+
+Core modules are unaffected: they are never subscription-gated (DEBT-016), so for them a permission check is the whole story and `useModuleAccess` is accidentally correct.
+
+**What the fix requires:**
+
+1. A real source of subscription state — `GET /api/v1/billing/modules` already returns exactly this (implemented, Section 6.10), keyed by module with an `enabled` boolean.
+2. Splitting the hook in two, so the names stop lying: `useCanPerform(module, action)` for RBAC and a separate `useModuleEnabled(module)` for subscription, with nav visibility requiring **both** for industry keys and permission alone for core keys.
+3. A decision on the UX for a subscribed-but-unpermitted vs unsubscribed module — hide the item, or show it disabled with a route to Billing. Showing it disabled is the better upsell path and matches what the placeholder pages now say; hiding is less confusing. Not decided.
+
+**Blocked on:** the frontend API client. `src/` currently makes no HTTP calls at all — no `fetch`, no `axios`, no `api/v1` reference anywhere — so there is no way to read subscription state yet. This lands with the frontend integration phase, alongside [DEBT-006].
+
+**Interim state:** the five previously-404ing routes now have real pages (commit `41f376f`), and the three industry pages state plainly that the module is a subscription-gated add-on that is not enabled. So the misleading nav item now leads to an honest explanation instead of a 404 — the symptom is contained, the gating bug is not fixed.
+
+**Source:** `src/hooks/use-permissions.ts` (`useModuleAccess`), `src/config/nav.ts` (industry group), `src/components/shared/Sidebar.tsx`. Found while fixing the 404 routes. Related: [DEBT-006], [DEBT-016].
+
+**Status:** Open — frontend correctness gap; the backend behaves correctly and refuses these modules. Blocked on the frontend API client.
+
+---
+
+### DEBT-022 — `DELETE /products/:id` is specified so that no product a business has ever sold can be deleted
+
+**Where it needs to land:** Section 6.6 (`DELETE /products/:id`), and Section 3.x wherever the product lifecycle is described
+
+**What needs to be written:** Section 6.6 specifies that `DELETE /products/:id` returns **409** if the product appears on any `OrderLine` or `POLine`. Implemented as written (`ProductsService.remove`), and tested as written. But the rule makes the endpoint unusable for its actual purpose:
+
+- The products a business wants to remove from its catalogue are, by definition, the ones it has stopped selling — which means they have sold. A product with **no** line history is one that was created by mistake and never traded, which is the only case the endpoint now serves.
+- So the ordinary "discontinue this item" operation has no endpoint. The only way to get a product out of the catalogue is `PATCH { isActive: false }`, which happens to work but is not what the spec presents as the removal path.
+
+The history the 409 protects is **already safe without it**, twice over:
+
+1. Delete here is a soft delete (`deletedAt`), so the product row survives and every `OrderLine.productId` / `POLine.productId` FK still resolves. Nothing is orphaned.
+2. Both line tables carry a denormalised `productNameSnapshot` precisely so a historical document renders correctly even if the product is renamed or removed (the same pattern as `Supplier.supplierNameSnapshot`, DEBT-003).
+
+A hard delete would need this guard. A soft delete does not, and the guard is what is specified.
+
+**What the fix requires — one of:**
+
+1. **Drop the 409** and let `DELETE` soft-delete regardless of history. Simplest, and consistent with how customers and suppliers already behave (neither checks history, for exactly this reason: the row survives).
+2. **Keep the 409 but rename the operation** in the spec, so it reads as "delete a product created in error" rather than the general removal path, and document `PATCH { isActive: false }` as the discontinue path alongside it.
+3. **Add an explicit discontinue endpoint** (`POST /products/:id/discontinue`) so intent is recorded in the audit trail rather than inferred from an `isActive` flip. Most work; most honest about what the user meant.
+
+Option 1 is the recommendation. Option 2 is the minimum — the current text describes a general-purpose delete that in practice refuses almost every real call.
+
+**Interim state:** implemented per spec, not per this objection. The 409's message names `PATCH { isActive: false }` explicitly so a caller who hits it is not left without a way forward, and `products.e2e.spec.ts` asserts both the 409 and that the deactivate alternative still succeeds — so if the rule is dropped later, the test that changes is the one that documents this decision.
+
+**Source:** `backend/src/products/products.service.ts` (`remove`, and the header comment), `backend/src/products/products.e2e.spec.ts` ("answers 409 for a product that appears on an order line"). Found while implementing Section 6.6. Related: [DEBT-003].
+
+**Status:** Open — spec objection, raised rather than silently overridden. Needs a product/spec decision between the three options above.
+
+---
+
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
