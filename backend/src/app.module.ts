@@ -5,11 +5,14 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
+import { CustomersModule } from './customers/customers.module';
 import { MailModule } from './mail/mail.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProductsModule } from './products/products.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { RolesModule } from './roles/roles.module';
 import { SettingsModule } from './settings/settings.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
 import { UsersModule } from './users/users.module';
@@ -47,6 +50,13 @@ import { UsersModule } from './users/users.module';
     // Section 6.5 — user management. Imports AuthModule for PasswordService, so
     // a created user's password is hashed by the same code login verifies with.
     UsersModule,
+    // Section 6.6 — the core business entities. Nothing depends on them yet;
+    // Sections 6.7-6.9 build orders, adjustments and POs on top, which is why
+    // Product.stock is read-only here and only the audited adjustment endpoint
+    // writes it.
+    CustomersModule,
+    SuppliersModule,
+    ProductsModule,
     // Section 6.10 — the write side of the module gating that step 5 enforces
     // on read. Imported after AuthModule so the global guard is registered
     // before these controllers' routes are mapped.
