@@ -11,12 +11,14 @@ import {
   type Action,
   type ModuleKey,
 } from '../access-control/access-control.constants';
+import { visibleRoleWhere } from '../access-control/role-visibility';
 import {
   PaginatedEnvelope,
   PaginationQueryDto,
   paginate,
   resolvePagination,
 } from '../common/dto/pagination.dto';
+import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
 import {
@@ -251,17 +253,12 @@ export class RolesService {
   }
 
   /**
-   * The filter defining "roles this tenant may see": global built-ins plus its
-   * own, never another tenant's, never soft-deleted.
+   * The filter defining "roles this tenant may see". Delegates to the shared
+   * `visibleRoleWhere` so this file and UsersService cannot drift apart — a
+   * divergence between them would be a cross-tenant hole.
    */
-  private visibleRoleFilter(): {
-    deletedAt: null;
-    OR: [{ tenantId: null }, { tenantId: string }];
-  } {
-    return {
-      deletedAt: null,
-      OR: [{ tenantId: null }, { tenantId: this.requireTenantId() }],
-    };
+  private visibleRoleFilter(): Prisma.RoleWhereInput {
+    return visibleRoleWhere(this.requireTenantId());
   }
 
   /**

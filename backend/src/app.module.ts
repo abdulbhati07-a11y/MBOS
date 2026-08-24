@@ -12,6 +12,7 @@ import { RolesModule } from './roles/roles.module';
 import { SettingsModule } from './settings/settings.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -43,6 +44,9 @@ import { TenantContextMiddleware } from './tenancy/tenant-context.middleware';
     // AccessControlModule, which enforces permissions; this exposes the REST
     // surface that manages them (DEBT-006, DEBT-007).
     RolesModule,
+    // Section 6.5 — user management. Imports AuthModule for PasswordService, so
+    // a created user's password is hashed by the same code login verifies with.
+    UsersModule,
     // Section 6.10 — the write side of the module gating that step 5 enforces
     // on read. Imported after AuthModule so the global guard is registered
     // before these controllers' routes are mapped.
