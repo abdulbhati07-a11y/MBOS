@@ -1,9 +1,28 @@
 "use client"
 
+// ---------------------------------------------------------------------------
+// src/components/inventory/StockAdjustmentDialog.tsx
+//
+// Writes a row to the stock ledger via `POST /inventory/adjustments`.
+//
+// The client-side negative-stock check is kept, but it is a fast fail and not the
+// guarantee. The server enforces PROV-BR-07 inside the same transaction that
+// applies the movement and answers 409 — which is the only check that holds when
+// two people adjust the same product at once, or when the count on screen is a few
+// seconds stale. Both paths are handled: the local one so the common case never
+// leaves the dialog, the 409 so the rare one is never silently lost.
+//
+// The dialog does not name the API's field. It emits `quantity` as an unsigned
+// magnitude and lets the page rename it to `quantityDelta` at the boundary
+// (DEBT-028), because the form's own guard, its preview arithmetic and its error
+// messages all read in magnitudes.
+// ---------------------------------------------------------------------------
+
 import * as React from "react"
-import { useForm } from "react-hook-form"
+import { useForm, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { stockAdjustmentSchema, StockAdjustmentValues } from "@/lib/validation/inventory"
+import { isApiError } from "@/lib/api/client"
 
 import {
   Dialog,
@@ -33,12 +52,23 @@ import {
 } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 
+const DEFAULTS: StockAdjustmentValues = {
+  type: "ADD",
+  quantity: 1,
+  reasonCode: "Received",
+}
+
 interface StockAdjustmentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   productName: string
   currentStock: number
-  onConfirm?: (data: StockAdjustmentValues) => void
+  /**
+   * Resolves when the ledger row is written, rejects with the ApiError if it is
+   * not. Rejection keeps the dialog open — a stock adjustment the user believes
+   * landed but did not is the one outcome worth guarding hardest against.
+   */
+  onConfirm: (data: StockAdjustmentValues) => Promise<unknown>
 }
 
 export function StockAdjustmentDialog({
@@ -48,29 +78,29 @@ export function StockAdjustmentDialog({
   currentStock,
   onConfirm,
 }: StockAdjustmentDialogProps) {
+  const [formError, setFormError] = React.useState<string | null>(null)
+
   const form = useForm<StockAdjustmentValues>({
-    // as any: known zodResolver + z.coerce interop gap, not a real type error
-    // z.coerce.number() has input=unknown / output=number; @hookform/resolvers can't reconcile that yet
-    resolver: zodResolver(stockAdjustmentSchema) as any,
-    defaultValues: {
-      type: "ADD",
-      quantity: 1,
-      reasonCode: "Received",
-    },
+    // Asserted, not assigned: `z.coerce.number()` types its input as `unknown`, so
+    // the schema's input type is not `StockAdjustmentValues`. Asserting through
+    // `Resolver<StockAdjustmentValues>` keeps it to one shape rather than `any`.
+    resolver: zodResolver(
+      stockAdjustmentSchema,
+    ) as unknown as Resolver<StockAdjustmentValues>,
+    defaultValues: DEFAULTS,
   })
 
   // Reset form when dialog opens
   React.useEffect(() => {
     if (open) {
-      form.reset({
-        type: "ADD",
-        quantity: 1,
-        reasonCode: "Received",
-      })
+      form.reset(DEFAULTS)
+      setFormError(null)
     }
   }, [open, form])
 
-  const onSubmit = (data: StockAdjustmentValues) => {
+  const onSubmit = async (data: StockAdjustmentValues) => {
+    setFormError(null)
+
     // PROV-BR-07: Prevent negative stock
     if (data.type === "REMOVE" && currentStock - data.quantity < 0) {
       form.setError("quantity", {
@@ -80,13 +110,44 @@ export function StockAdjustmentDialog({
       return
     }
 
-    console.log("Adjust Stock:", { product: productName, ...data })
-    onConfirm?.(data)
-    onOpenChange(false)
+    try {
+      await onConfirm(data)
+      onOpenChange(false)
+    } catch (err) {
+      if (!isApiError(err)) {
+        setFormError("Could not reach the server. No adjustment was recorded.")
+        return
+      }
+      if (err.isConflict) {
+        // Insufficient stock, decided server-side against the live count. The
+        // message names the real figure, which is more use than a restatement of
+        // the stale one this dialog opened with.
+        form.setError("quantity", { type: "server", message: err.message })
+        return
+      }
+      if (err.isValidation) {
+        // `quantityDelta` is this form's `quantity`; nothing else the server can
+        // reject here maps to a visible field.
+        const fields = err.fieldErrors()
+        const quantityMessage = fields.quantityDelta ?? fields.quantity
+        if (quantityMessage !== undefined) {
+          form.setError("quantity", { type: "server", message: quantityMessage })
+        } else {
+          setFormError(err.message)
+        }
+        return
+      }
+      if (err.isForbidden) {
+        setFormError("You do not have permission to adjust stock.")
+        return
+      }
+      setFormError(err.message)
+    }
   }
 
   const type = form.watch("type")
   const quantity = form.watch("quantity")
+  const saving = form.formState.isSubmitting
 
   // Calculate resulting stock for preview
   let resultingStock = currentStock
@@ -149,7 +210,9 @@ export function StockAdjustmentDialog({
                 name="quantity"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Quantity</FormLabel>
+                    <FormLabel>
+                      {type === "COUNT" ? "Counted Quantity" : "Quantity"}
+                    </FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>
@@ -195,9 +258,26 @@ export function StockAdjustmentDialog({
               </div>
             </div>
 
+            {formError !== null && (
+              <p
+                role="alert"
+                className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {formError}
+              </p>
+            )}
+
             <DialogFooter>
-              <DialogClose render={<Button type="button" variant="outline">Cancel</Button>} />
-              <Button type="submit">Confirm Adjustment</Button>
+              <DialogClose
+                render={
+                  <Button type="button" variant="outline" disabled={saving}>
+                    Cancel
+                  </Button>
+                }
+              />
+              <Button type="submit" disabled={saving}>
+                {saving ? "Recording…" : "Confirm Adjustment"}
+              </Button>
             </DialogFooter>
           </form>
         </Form>
