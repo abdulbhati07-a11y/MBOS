@@ -11,6 +11,7 @@ import { MailModule } from './mail/mail.module';
 import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProductsModule } from './products/products.module';
+import { PurchasesModule } from './purchases/purchases.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { RolesModule } from './roles/roles.module';
 import { SettingsModule } from './settings/settings.module';
@@ -69,6 +70,12 @@ import { UsersModule } from './users/users.module';
     // agree on the shape of a StockAdjustment row for the audit log to reconcile
     // (BR-02). Also owns the alerts the Dashboard's Inventory Health widget reads.
     InventoryModule,
+    // Section 6.9 — purchase orders. Registered after InventoryModule because
+    // receiving a PO is the third writer of Product.stock, and it writes the
+    // StockAdjustment row through the same `PurchaseReceived` reason code 6.8's
+    // DTO reserves for it — so the two modules have to agree on that shape for
+    // BR-02's ledger to reconcile against the purchase side.
+    PurchasesModule,
     // Section 6.10 — the write side of the module gating that step 5 enforces
     // on read. Imported after AuthModule so the global guard is registered
     // before these controllers' routes are mapped.
