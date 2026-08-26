@@ -64,9 +64,7 @@ export class UsersController {
 
   @RequiresPermission('settings', 'delete')
   @Delete(':id')
-  async remove(
-    @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<UserResponse> {
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<UserResponse> {
     return this.users.remove(id);
   }
 }

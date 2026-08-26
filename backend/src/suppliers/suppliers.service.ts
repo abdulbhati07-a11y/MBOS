@@ -188,10 +188,7 @@ export class SuppliersService {
   }
 
   /** PATCH /suppliers/:id — partial update. */
-  async update(
-    id: string,
-    dto: UpdateSupplierDto,
-  ): Promise<SupplierResponse> {
+  async update(id: string, dto: UpdateSupplierDto): Promise<SupplierResponse> {
     await this.findLiveOrThrow(id);
     const email = dto.email?.trim().toLowerCase();
 

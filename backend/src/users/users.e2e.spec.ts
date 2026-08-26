@@ -232,9 +232,9 @@ describe('Users (e2e)', () => {
         select: { passwordHash: true },
       });
       expect(row?.passwordHash).not.toBe(CREATED_PASSWORD);
-      expect(await passwords.verify(CREATED_PASSWORD, row?.passwordHash ?? '')).toBe(
-        true,
-      );
+      expect(
+        await passwords.verify(CREATED_PASSWORD, row?.passwordHash ?? ''),
+      ).toBe(true);
     });
 
     it('lowercases the email so addresses cannot collide by case', async () => {
@@ -284,7 +284,9 @@ describe('Users (e2e)', () => {
           roleId: ABSENT_UUID,
         })
         .expect(422);
-      expect(bodyOf<ErrorEnvelope>(res).error.message).toMatch(/not available/i);
+      expect(bodyOf<ErrorEnvelope>(res).error.message).toMatch(
+        /not available/i,
+      );
     });
 
     it('refuses a Manager', async () => {
@@ -320,7 +322,9 @@ describe('Users (e2e)', () => {
         .set(authed(ownerToken))
         .send({ roleId: cashierRoleId })
         .expect(403);
-      expect(bodyOf<ErrorEnvelope>(res).error.message).toMatch(/your own role/i);
+      expect(bodyOf<ErrorEnvelope>(res).error.message).toMatch(
+        /your own role/i,
+      );
     });
 
     it('refuses to let the caller deactivate themselves', async () => {

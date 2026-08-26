@@ -82,7 +82,9 @@ export const INDUSTRY_MODULE_KEYS = [
  */
 export const CORE_MODULE_KEYS = MODULE_KEYS.filter(
   (moduleKey): moduleKey is ModuleKey =>
-    !INDUSTRY_MODULE_KEYS.includes(moduleKey as (typeof INDUSTRY_MODULE_KEYS)[number]),
+    !INDUSTRY_MODULE_KEYS.includes(
+      moduleKey as (typeof INDUSTRY_MODULE_KEYS)[number],
+    ),
 );
 
 /**

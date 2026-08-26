@@ -53,7 +53,9 @@ describe('BillingService', () => {
       // with no row, reported as disabled. Core modules (e.g. sales) are never
       // listed here at all.
       expect(result).toHaveLength(INDUSTRY_MODULE_KEYS.length);
-      expect(result.find((m) => m.moduleKey === 'pharmacy')?.enabled).toBe(true);
+      expect(result.find((m) => m.moduleKey === 'pharmacy')?.enabled).toBe(
+        true,
+      );
       expect(result.find((m) => m.moduleKey === 'clinic')?.enabled).toBe(false);
       expect(
         result.find((m) => m.moduleKey === 'clinic')?.enabledAt,

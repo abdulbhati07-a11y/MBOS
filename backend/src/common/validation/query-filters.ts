@@ -30,7 +30,10 @@ import {
 export function IsOptionalBooleanQuery(): PropertyDecorator {
   return applyDecorators(
     IsOptional(),
-    Transform(({ value }) => {
+    // `value` is typed `unknown` rather than left as class-transformer's `any`,
+    // so the pass-through return below is a checked `unknown` and not an `any`
+    // escaping into the DTO. `@IsBoolean` is what rejects it from there.
+    Transform(({ value }: { value: unknown }) => {
       if (value === 'true') return true;
       if (value === 'false') return false;
       return value;

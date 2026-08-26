@@ -196,10 +196,7 @@ export class CustomersService {
   }
 
   /** PATCH /customers/:id — partial update. */
-  async update(
-    id: string,
-    dto: UpdateCustomerDto,
-  ): Promise<CustomerResponse> {
+  async update(id: string, dto: UpdateCustomerDto): Promise<CustomerResponse> {
     await this.findLiveOrThrow(id);
     const email = dto.email?.trim().toLowerCase();
 

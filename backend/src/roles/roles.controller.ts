@@ -58,9 +58,7 @@ export class RolesController {
 
   @RequiresPermission('settings', 'delete')
   @Delete(':id')
-  async remove(
-    @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<RoleResponse> {
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<RoleResponse> {
     return this.roles.remove(id);
   }
 

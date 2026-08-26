@@ -35,9 +35,7 @@ export class InventoryController {
 
   @RequiresPermission('inventory', 'write')
   @Post('adjustments')
-  async create(
-    @Body() dto: CreateAdjustmentDto,
-  ): Promise<AdjustmentResponse> {
+  async create(@Body() dto: CreateAdjustmentDto): Promise<AdjustmentResponse> {
     return this.inventory.create(dto);
   }
 

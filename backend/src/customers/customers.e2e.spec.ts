@@ -9,10 +9,7 @@ import { ApiExceptionFilter } from '../common/filters/http-exception.filter';
 import { ApiValidationPipe } from '../common/pipes/api-validation.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitConfig } from '../rate-limit/rate-limit.config';
-import {
-  CustomerDetailResponse,
-  CustomerResponse,
-} from './dto/customer.dto';
+import { CustomerDetailResponse, CustomerResponse } from './dto/customer.dto';
 
 /**
  * End-to-end coverage of Section 6.6's customer endpoints.

@@ -71,7 +71,9 @@ void bootstrap();
  * X-Forwarded-For entry from anyone, which any client can forge, defeating every
  * per-IP limit. Trusting a proxy must be a deliberate, pinned choice.
  */
-function resolveTrustProxy(raw: string | undefined): boolean | number | string[] {
+function resolveTrustProxy(
+  raw: string | undefined,
+): boolean | number | string[] {
   const value = raw?.trim();
   if (value === undefined || value === '' || value.toLowerCase() === 'false') {
     return false;

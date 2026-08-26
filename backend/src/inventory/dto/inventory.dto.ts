@@ -1,11 +1,4 @@
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  IsUUID,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { IsOptionalDateQuery } from '../../common/validation/query-filters';
 

@@ -65,7 +65,9 @@ export class UsersService {
   ) {}
 
   /** GET /users — paginated, optional `?isActive=`. */
-  async list(query: UserListQueryDto): Promise<PaginatedEnvelope<UserResponse>> {
+  async list(
+    query: UserListQueryDto,
+  ): Promise<PaginatedEnvelope<UserResponse>> {
     const page = resolvePagination(query);
     const where = {
       deletedAt: null,

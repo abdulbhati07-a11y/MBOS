@@ -31,6 +31,30 @@ export default tseslint.config(
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
       "prettier/prettier": ["error", { endOfLine: "auto" }],
+
+      // A leading underscore marks a binding that exists for a reason other than
+      // being read, and there are two such reasons here that both matter:
+      //
+      //   - A parameter that satisfies an interface. `ConsoleMailProvider`
+      //     implements `MailProvider.sendPasswordReset(email, token)`; the token
+      //     is deliberately not logged, because logging it would put a working
+      //     reset credential in the log.
+      //   - A `@Body()` parameter that exists to be *validated*. Binding
+      //     `UpdateOrderStatusDto` is what rejects every status other than
+      //     'Completed' before the service is reached. Nothing reads the value,
+      //     and deleting the parameter would silently remove the check.
+      //
+      // Without this pattern the rule's only remedies are to delete a parameter
+      // that is load-bearing or to sprinkle disable comments, so the convention
+      // is configured once here instead.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
     },
   },
   {

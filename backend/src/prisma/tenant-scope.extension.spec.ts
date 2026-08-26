@@ -1,6 +1,7 @@
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '../generated/prisma/client';
 import { PrismaModule } from './prisma.module';
 import { PrismaService } from './prisma.service';
 import { TenancyModule } from '../tenancy/tenancy.module';
@@ -61,7 +62,16 @@ describe('tenant scope extension', () => {
   it('stamps tenantId on create without the caller passing it', async () => {
     const product = await asTenant(tenantA, () =>
       prisma.db.product.create({
-        data: { name: 'Scoped Widget', sku, priceCents: 1_500 },
+        // Omitting `tenant`/`tenantId` is the point of the test, so the input is
+        // asserted for the same reason the services assert theirs: the generated
+        // type demands the relation, and the extension is what supplies it. If
+        // this assertion were removed the test would not compile, which would
+        // hide the very behaviour it exists to prove.
+        data: {
+          name: 'Scoped Widget',
+          sku,
+          priceCents: 1_500,
+        } as Prisma.ProductUncheckedCreateInput,
       }),
     );
     expect(product.tenantId).toBe(tenantA);

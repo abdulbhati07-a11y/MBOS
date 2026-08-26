@@ -681,9 +681,9 @@ describe('Inventory (e2e)', () => {
 
     it('filters by type', async () => {
       const product = await makeProduct(10);
-      await fileAdjustment(
-        adjustBody(product.id, 'ADD', 4, 'Received'),
-      ).expect(201);
+      await fileAdjustment(adjustBody(product.id, 'ADD', 4, 'Received')).expect(
+        201,
+      );
       await fileAdjustment(
         adjustBody(product.id, 'REMOVE', 2, 'Damaged'),
       ).expect(201);
@@ -701,9 +701,9 @@ describe('Inventory (e2e)', () => {
 
     it('filters by branchId', async () => {
       const product = await makeProduct(10);
-      await fileAdjustment(
-        adjustBody(product.id, 'ADD', 1, 'Received'),
-      ).expect(201);
+      await fileAdjustment(adjustBody(product.id, 'ADD', 1, 'Received')).expect(
+        201,
+      );
 
       const here = await get(
         `/api/v1/inventory/adjustments?productId=${product.id}&branchId=${branchId}`,
@@ -731,9 +731,9 @@ describe('Inventory (e2e)', () => {
      */
     it('includes today when dateTo is a bare date', async () => {
       const product = await makeProduct(10);
-      await fileAdjustment(
-        adjustBody(product.id, 'ADD', 1, 'Received'),
-      ).expect(201);
+      await fileAdjustment(adjustBody(product.id, 'ADD', 1, 'Received')).expect(
+        201,
+      );
 
       const today = new Date().toISOString().slice(0, 10);
       const res = await get(
@@ -750,9 +750,9 @@ describe('Inventory (e2e)', () => {
 
     it('excludes an adjustment outside the range', async () => {
       const product = await makeProduct(10);
-      await fileAdjustment(
-        adjustBody(product.id, 'ADD', 1, 'Received'),
-      ).expect(201);
+      await fileAdjustment(adjustBody(product.id, 'ADD', 1, 'Received')).expect(
+        201,
+      );
 
       const res = await get(
         `/api/v1/inventory/adjustments?productId=${product.id}` +

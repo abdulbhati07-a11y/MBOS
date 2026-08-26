@@ -9,10 +9,7 @@ import { ApiExceptionFilter } from '../common/filters/http-exception.filter';
 import { ApiValidationPipe } from '../common/pipes/api-validation.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitConfig } from '../rate-limit/rate-limit.config';
-import {
-  SupplierDetailResponse,
-  SupplierResponse,
-} from './dto/supplier.dto';
+import { SupplierDetailResponse, SupplierResponse } from './dto/supplier.dto';
 
 /**
  * End-to-end coverage of Section 6.6's supplier endpoints.

@@ -71,16 +71,40 @@ export class RateLimitConfig {
     this.enabled = config.get<string>('RATE_LIMIT_ENABLED') !== 'false';
 
     this.authIpLimit = effectiveLimit(
-      positive(config, 'RATE_LIMIT_AUTH_IP_PER_MINUTE', RATE_LIMIT_DEFAULTS.authIpPerMinute),
-      nonNegative(config, 'RATE_LIMIT_AUTH_IP_BURST', RATE_LIMIT_DEFAULTS.authIpBurst),
+      positive(
+        config,
+        'RATE_LIMIT_AUTH_IP_PER_MINUTE',
+        RATE_LIMIT_DEFAULTS.authIpPerMinute,
+      ),
+      nonNegative(
+        config,
+        'RATE_LIMIT_AUTH_IP_BURST',
+        RATE_LIMIT_DEFAULTS.authIpBurst,
+      ),
     );
     this.globalIpLimit = effectiveLimit(
-      positive(config, 'RATE_LIMIT_GLOBAL_IP_PER_MINUTE', RATE_LIMIT_DEFAULTS.globalIpPerMinute),
-      nonNegative(config, 'RATE_LIMIT_GLOBAL_IP_BURST', RATE_LIMIT_DEFAULTS.globalIpBurst),
+      positive(
+        config,
+        'RATE_LIMIT_GLOBAL_IP_PER_MINUTE',
+        RATE_LIMIT_DEFAULTS.globalIpPerMinute,
+      ),
+      nonNegative(
+        config,
+        'RATE_LIMIT_GLOBAL_IP_BURST',
+        RATE_LIMIT_DEFAULTS.globalIpBurst,
+      ),
     );
     this.tenantLimit = effectiveLimit(
-      positive(config, 'RATE_LIMIT_TENANT_PER_MINUTE', RATE_LIMIT_DEFAULTS.tenantPerMinute),
-      nonNegative(config, 'RATE_LIMIT_TENANT_BURST', RATE_LIMIT_DEFAULTS.tenantBurst),
+      positive(
+        config,
+        'RATE_LIMIT_TENANT_PER_MINUTE',
+        RATE_LIMIT_DEFAULTS.tenantPerMinute,
+      ),
+      nonNegative(
+        config,
+        'RATE_LIMIT_TENANT_BURST',
+        RATE_LIMIT_DEFAULTS.tenantBurst,
+      ),
     );
   }
 }
@@ -91,12 +115,20 @@ function effectiveLimit(perMinute: number, burst: number): number {
 }
 
 /** A per-minute rate: must be present-or-default and strictly positive. */
-function positive(config: ConfigService, key: string, fallback: number): number {
+function positive(
+  config: ConfigService,
+  key: string,
+  fallback: number,
+): number {
   return parseEnvNumber(config, key, fallback, { allowZero: false });
 }
 
 /** A burst allowance: like {@link positive}, but zero is a valid "no burst". */
-function nonNegative(config: ConfigService, key: string, fallback: number): number {
+function nonNegative(
+  config: ConfigService,
+  key: string,
+  fallback: number,
+): number {
   return parseEnvNumber(config, key, fallback, { allowZero: true });
 }
 

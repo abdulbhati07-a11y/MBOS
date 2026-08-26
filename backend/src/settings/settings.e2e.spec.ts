@@ -178,7 +178,11 @@ describe('Settings and Branches (e2e)', () => {
     // isDefault row per tenant, so promoting before demoting would collide.
     if (originalDefaultBranchId) {
       await prisma.branch.updateMany({
-        where: { tenantId, isDefault: true, id: { not: originalDefaultBranchId } },
+        where: {
+          tenantId,
+          isDefault: true,
+          id: { not: originalDefaultBranchId },
+        },
         data: { isDefault: false },
       });
       await prisma.branch.update({
