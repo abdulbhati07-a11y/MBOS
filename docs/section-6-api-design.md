@@ -244,9 +244,17 @@ The DB-state lookup is deliberate: if an admin changes a user's role while their
   "roleName": "Manager",
   "roleId": "role-uuid",
   "tenantId": "tenant-uuid",
-  "mfaEnabled": true
+  "mfaEnabled": true,
+  "branchId": "branch-uuid",
+  "branchName": "Main Branch"
 }
 ```
+
+**On `branchId` / `branchName`:** added during frontend integration, because Section 6.3 as originally written left the POS unable to operate. `POST /orders` (6.7) and `POST /inventory/adjustments` (6.8) both require a `branchId`, and the only endpoint listing branches is `GET /branches` (6.4), which requires `settings.read` — a permission the Cashier role does not hold. The one role whose entire job is ringing up sales therefore had no way to discover the branch every sale must be filed against.
+
+It is returned here rather than defaulted inside `POST /orders` for two reasons: `/auth/me` is already the endpoint that answers "who am I and what may I do", and it is `@NoModuleRequired`, so this adds no permission surface. Keeping `branchId` **required** on the write endpoints means an order can never be silently filed against a branch nobody chose.
+
+The value is the tenant's default branch — `isDefault` first, then oldest — restricted to branches that are active and not soft-deleted, since `isActive: false` exists precisely to stop new activity against a retired branch. It is `null` when the tenant has no usable branch; a client must surface that rather than substitute a guess, because a tenant in that state genuinely cannot record a sale. When per-user branch assignment lands (FR-TEN-03), this becomes the user's assigned branch and no caller changes.
 
 **Performance note:** This endpoint is called once per session start, not on every page navigation. If it becomes a hot path (e.g., called on every SPA route change), a short TTL cache keyed on `userId` should be introduced at the application layer. This is not designed now — flagged for the implementation phase.
 
@@ -421,6 +429,39 @@ Paginated order list. Supports filtering:
 - `?dateFrom=<ISO date>` and `?dateTo=<ISO date>`
 
 Requires `sales.read`.
+
+**Response rows carry `customerName` and `lineCount`** in addition to the `Order` columns:
+
+```json
+{
+  "id": "uuid",
+  "orderNumber": "#1042",
+  "date": "2026-08-26T09:14:00.000Z",
+  "customerId": "uuid-or-null",
+  "customerName": "Ayesha Khan",
+  "lineCount": 3,
+  "status": "Completed",
+  "taxRateBps": 1700,
+  "subtotalCents": 450000,
+  "taxAmountCents": 76500,
+  "totalCents": 526500
+}
+```
+
+**On `customerName` / `lineCount`:**
+
+Both are additions beyond this section's original field list, and both exist to keep the sales history renderable in one request. Without `customerName` a list can only show a customer *id*, and the only way to name the buyer is a `GET /customers/:id` per row — an N+1 on the busiest read in the product. Without `lineCount` an item count requires loading every order's lines and discarding them.
+
+They are joined, not stored: one join per page, no extra round trips.
+
+`customerName` is deliberately **not** a snapshot, which puts it in opposition to `OrderLine.productNameSnapshot` (BR-10). The distinction is intentional and worth stating, because the two look like the same problem:
+
+- A line's product name must never move. It is what the receipt said when it printed, and a repricing or rename must not rewrite history.
+- An order's customer name should move. A renamed customer is the *same* customer, and a sales history that still shows a former name reads as a different person — which is worse than useless when the list is being used to find someone's orders.
+
+`customerName` is `null` for a walk-in sale, exactly as `customerId` is. Both are returned rather than one being derived from the other, so a client never has to decide whether an absent name means "walk-in" or "not loaded".
+
+`lineCount` counts **lines, not units** — `2` means two distinct products were sold, not two items.
 
 ### POST /api/v1/orders
 

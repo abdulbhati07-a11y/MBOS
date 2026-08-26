@@ -643,6 +643,135 @@ The hazard is specifically in (2), because an implementation that gets it backwa
 
 ---
 
+### DEBT-030 — `GET /customers` returns no order aggregates, so the customers list cannot show what a customer is worth
+
+**Where it needs to land:** Section 6.6 (`GET /api/v1/customers`), and Section 2 FR-CUST-*
+
+**What needs to be written:** whether a customer list row carries any summary of that customer's trading history, and if so, what each figure counts.
+
+The mock-driven customers page had two columns the API cannot fill: **Total Orders** and **Total Spend**. `GET /customers` returns the customer record only — name, contacts, `isActive`, timestamps. `GET /customers/:id` embeds a page of order history, so the figures are reachable, but only one customer at a time: rendering them in a ten-row table means eleven requests, and the count would still be the page size rather than the total.
+
+Both columns were therefore **dropped** when the page was wired, rather than filled with a per-row fetch or a fabricated number.
+
+The reason they cannot simply be added is that neither is well defined yet, and the definitions are business decisions rather than implementation details:
+
+1. **Total Orders — over which statuses?** Counting `Pending` orders means the figure moves when an order is completed and moves again if it is abandoned. Counting only `Completed` means a customer with a full basket at the till reads as never having bought anything.
+2. **Total Spend — gross or net of refunds?** A customer who bought Rs 100,000 and returned all of it has spent Rs 100,000 by one reading and Rs 0 by another. Both are defensible; they answer different questions ("how much have we invoiced them" vs "how much have we kept"), and a single unlabelled column cannot mean both.
+3. **Over what window?** Lifetime, or a trailing period? A lifetime figure makes a long-dormant customer look active.
+
+Note this is the mirror of the `customerName`/`lineCount` join added to `GET /orders`: that one was added because a customer's name on their own order needs no business definition, whereas these two do. The distinction is worth recording so the next such gap is decided the same way rather than by whichever is easier.
+
+**What the fix requires:** decide the three questions above, then either add the aggregates to `GET /customers` as named fields whose names state their answer (`completedOrderCount`, `netSpendCents`, not `totalOrders`/`totalSpend`) or state in §6.6 that the list is deliberately record-only and the figures live on the detail view.
+
+**Interim state:** the two columns are absent from `src/app/(dashboard)/customers/page.tsx`. `CustomerDetail.orders` (a paginated envelope) is the only order data any customer view has, and the detail dialog renders it as a list rather than a total.
+
+**Source:** `backend/src/customers/customers.service.ts`, `src/lib/api/customers/queries.ts` (`Customer` vs `CustomerDetail`), `src/app/(dashboard)/customers/page.tsx`. Raised while wiring the Customers page to the API. Related: [DEBT-023].
+
+**Status:** Open — two list columns were removed rather than guessed. Needs §6.6 to say whether they come back and what they count.
+
+---
+
+### DEBT-031 — The frontend permission matrix is a second copy of the backend's, and a custom role renders a dead UI
+
+**Where it needs to land:** Section 6.4 (roles and permissions), and Section 4 (System Architecture) as an authority statement
+
+**What needs to be written:** which artefact is the authority on what a role may do, and how a client learns it.
+
+There are currently two independent answers. `src/config/permissions.ts` holds a hard-coded module × action matrix per built-in role name, and `useCanPerform()` reads it to decide whether to render a button. The backend holds `RolePermission` rows and enforces them per request. Nothing keeps the two in agreement, and the frontend copy has a structural limit the backend does not: it is keyed by **role name**, so it can only describe the four built-in roles.
+
+The consequence is specific and user-visible. `POST /roles` creates custom roles with arbitrary permission sets (Section 6.4). A user assigned such a role gets a lookup miss in the frontend matrix, which fails closed — so the UI hides every gated action, including ones the server would allow. The user sees an application with no buttons, and nothing in the interface explains why. Their requests would succeed if they could be made.
+
+The fail-closed direction is the right default and should stay: a visible button that 403s is worse than an absent one. But it is a safe failure of a wrong design, not a correct behaviour.
+
+**The fix is for the session to carry the viewer's effective permissions.** `GET /auth/me` already returns the user's role; it should return the permission set that role resolves to, and `useCanPerform` should read that instead of a local table. Then a custom role works with no frontend change, the two copies collapse into one, and the client's answer is derived from the server's rather than kept in step with it by hand.
+
+**What the fix requires:** add the resolved permission set to `GET /auth/me`'s response in §6.2, state in §6.4 that `RolePermission` is the sole authority, and record that any client-side permission check is a rendering affordance whose only legitimate source is that response. Then delete the role-keyed matrix.
+
+**Interim state:** `src/config/permissions.ts` remains the frontend's source, and every wired page gates on it (`useCanPerform(Modules.SALES, Actions.REFUND)` and similar). This is correct for the four built-in roles and wrong for any custom role.
+
+**Source:** `src/config/permissions.ts`, `src/contexts/role-context.tsx`, `backend/src/access-control/access-control.constants.ts`, `backend/src/auth/auth.controller.ts` (`GET /auth/me`). Raised while wiring the Sales page's refund gate. Related: [DEBT-021].
+
+**Status:** Open — a custom role currently sees a UI with its actions hidden. Needs `/auth/me` to carry permissions.
+
+---
+
+### DEBT-032 — Dashboard and Reports read mock orders, and the wired Sales page no longer feeds them
+
+**Where it needs to land:** no SRS section — this is an implementation-sequencing note, recorded here because it is a **visible behaviour regression** that would otherwise look like a bug
+
+**What needs to be written:** nothing, in the documents. What needs recording is that the state is known and temporary.
+
+`OrdersProvider` (`src/contexts/orders-context.tsx`) holds a mock order array. Before Sales was wired, placing an order pushed a fabricated `OrderRecord` into it, so a new sale immediately appeared in the Dashboard's metrics and in the Reports page's figures. Both of those pages still read that context.
+
+Now that Sales posts to `POST /orders`, it no longer writes to the context — the order goes to the database and comes back through `GET /orders`. So:
+
+- **Sales history is real.** It reflects the database, paginates server-side, and survives a reload.
+- **Dashboard and Reports are still mock, and are now also static.** They show the seeded array and no longer gain a row when a sale is made.
+
+That is a loss of an illusion rather than a loss of data: those pages were never showing real figures, and a fabricated row appearing in a mock total was misleading in a way that is easy to mistake for working software. But an operator who places an order and sees the dashboard unchanged will read it as a fault, so it must not sit unexplained.
+
+`use-dashboard-metrics.ts` and `reports/page.tsx` are the two remaining consumers. `OrdersProvider` and `ProductsProvider` can both be deleted once those are wired — no earlier, because removing them now would leave two pages unable to render at all.
+
+**What the fix requires:** wire the Dashboard (composed from `GET /orders`, `GET /inventory/alerts` and `GET /products` — there is no dashboard endpoint) and the Reports page (needs Section 6.11, which does not exist yet). Then delete both providers and the `src/lib/mock-data/` modules they read.
+
+**Source:** `src/contexts/orders-context.tsx`, `src/hooks/use-dashboard-metrics.ts`, `src/app/(dashboard)/reports/page.tsx`, `src/app/(dashboard)/sales/page.tsx`. Raised while wiring the Sales page.
+
+**Status:** Open — expected to close when Dashboard and Reports are wired. Tracked so the static dashboard is not diagnosed as a defect.
+
+---
+
+### DEBT-033 — `PurchaseOrder` has no tax columns, so `totalCents` can only ever equal `subtotalCents`
+
+**Where it needs to land:** Section 6.9 (purchase orders), and Section 5's data model alongside the `PurchaseOrder` table
+
+**What needs to be written:** either that a purchase order is deliberately tax-free at this stage, or the two columns that would make the total mean something.
+
+`Order` carries `taxRateBps` and `taxAmountCents`, so its `totalCents` is a genuinely different number from its `subtotalCents`. `PurchaseOrder` carries neither. Section 6.9 nevertheless instructs the server to compute *both* `subtotalCents` and `totalCents` from the lines — and with no tax, no freight, no discount and no other adjustment column, that computation produces the same integer twice.
+
+So `totalCents` is, today, a duplicate of `subtotalCents` in every row the API can write. `PurchasesService.computePOTotals` returns it that way and the response exposes both, because the column exists and a client reading `totalCents` should not have to know it is currently redundant.
+
+The reason this is debt rather than a bug is that it hides a real question: **is purchase-side tax out of scope, or unbuilt?** A business buying stock in Pakistan pays sales tax on the purchase and generally reclaims it, which is exactly the kind of figure a purchase ledger is expected to carry. If that is deliberately deferred, the document should say so, because the schema currently *looks* like it forgot. If it is not deferred, the fix is columns and a migration, not a code change.
+
+Two smaller consequences worth noting when this is decided:
+
+- **Section 6.11's supplier-spend report will aggregate `totalCents`.** Whatever that column comes to mean, the report inherits it — so the answer here decides whether "spend" means tax-inclusive or not.
+- **The frontend PO form has no tax field.** It matches the schema today, which means adding tax later is a schema change *and* a form change, not just a backend one.
+
+**What the fix requires:** a decision, then either one sentence in Section 6.9 ("a purchase order records the pre-tax cost of goods; purchase tax is out of scope for v1") or a migration adding `taxRateBps` and `taxAmountCents` to `PurchaseOrder`, with `computePOTotals` and the PO DTO following.
+
+**Source:** `backend/prisma/schema.prisma` (`model PurchaseOrder`), `backend/src/purchases/purchases.service.ts` (`computePOTotals`), `backend/src/purchases/dto/purchase-order.dto.ts` (`PurchaseOrderResponse.totalCents`). Raised while building Section 6.9.
+
+**Status:** Open — the API is internally consistent; what is missing is the statement of intent.
+
+---
+
+### DEBT-034 — A purchase order does not say which branch receives the goods
+
+**Where it needs to land:** Section 6.9 (purchase orders), and Section 5's data model on the `PurchaseOrder` table
+
+**What needs to be written:** which branch a delivery lands in, and when that is decided.
+
+`StockAdjustment.branchId` is **required** — every stock movement is attributed to a branch, which is what makes a per-branch count possible at all. `Order` carries `branchId` for the same reason: a sale happens somewhere.
+
+`PurchaseOrder` carries no `branchId`. But receiving a PO writes stock adjustments — `SYSTEM_REASON_CODES` in Section 6.8's DTO reserves `PurchaseReceived` for exactly this — and each of those rows needs a branch. Nothing in the PO says which one.
+
+`PurchasesService.applyReceipt` resolves it to the tenant's **default branch**: `isDefault: true` first, then the oldest active branch as a fallback so a tenant whose seed never set the flag still receives stock. That is correct for the single-branch tenant the seed describes, and it is the only answer available without a migration. It is wrong the moment a tenant has two branches and a delivery arrives at the second one: the goods are counted at head office and the receiving branch's shelves read empty.
+
+The gap is narrower than it looks, because the *right* fix is not obvious and the document has to choose:
+
+- **`PurchaseOrder.branchId`, set when the PO is raised** — the buyer names the destination up front. Simple, and matches how `Order.branchId` works. Wrong if a PO is routinely split across branches on arrival.
+- **A branch on the receipt rather than the PO** — chosen at `PATCH /:id/status` when `toStatus` is `Received`. More faithful to how deliveries actually arrive, and it makes partial receipt across branches expressible later.
+
+The first is a column and a form field. The second is a body on a status transition that currently takes one field, and it changes what the endpoint means.
+
+**What the fix requires:** a decision in Section 6.9, then a migration. Until then, multi-branch tenants must not use purchase orders — which is neither enforced nor stated anywhere a user would see.
+
+**Source:** `backend/prisma/schema.prisma` (`model PurchaseOrder`, `model StockAdjustment`, `model Branch.isDefault`), `backend/src/purchases/purchases.service.ts` (`applyReceipt`, `defaultBranchId`). Raised while building Section 6.9.
+
+**Status:** Open — the single-branch case is correct; the multi-branch case silently books goods to the wrong branch.
+
+---
+
 ## Resolved
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
