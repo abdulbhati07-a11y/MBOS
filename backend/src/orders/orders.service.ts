@@ -38,6 +38,14 @@ const ORDER_SELECT = {
   totalCents: true,
   createdAt: true,
   updatedAt: true,
+  // Joined so a sales list can name the buyer and say how many items were sold
+  // without a request per row. Both are read live rather than snapshotted: unlike
+  // the line's `productNameSnapshot`, which must not move because it is what the
+  // receipt said, "whose order is this" should follow the customer's current name
+  // — a renamed customer is the same customer, and a history that still shows the
+  // old name reads as a different one.
+  customer: { select: { name: true } },
+  _count: { select: { lines: true } },
 } as const;
 
 const LINE_SELECT = {
@@ -72,6 +80,8 @@ type OrderRow = {
   totalCents: number;
   createdAt: Date;
   updatedAt: Date;
+  customer: { name: string } | null;
+  _count: { lines: number };
 };
 
 type LineRow = {
@@ -275,7 +285,9 @@ export class OrdersService {
 
       const short = products
         .filter((p) => p.stock < (needed.get(p.id) ?? 0))
-        .map((p) => `${p.name} (need ${needed.get(p.id) ?? 0}, have ${p.stock})`);
+        .map(
+          (p) => `${p.name} (need ${needed.get(p.id) ?? 0}, have ${p.stock})`,
+        );
       if (short.length > 0) {
         throw new ConflictException(
           `Order ${id} cannot be completed — insufficient stock for ` +
@@ -624,6 +636,11 @@ function toOrderResponse(row: OrderRow): OrderResponse {
     date: row.date.toISOString(),
     branchId: row.branchId,
     customerId: row.customerId,
+    // `null` for a walk-in sale, which is the same thing `customerId: null` says.
+    // Both are returned rather than one derived from the other so a client never
+    // has to decide whether an absent name means "walk-in" or "not loaded".
+    customerName: row.customer?.name ?? null,
+    lineCount: row._count.lines,
     paymentMethod: row.paymentMethod,
     status: row.status as OrderStatus,
     taxRateBps: row.taxRateBps,

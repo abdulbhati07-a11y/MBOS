@@ -322,9 +322,12 @@ describe('Orders (e2e)', () => {
     /** Half-up, and only once: 17.5% of Rs 1.00 is 17.5 paisa, stored as 18. */
     it('rounds tax half-up to a whole paisa', async () => {
       const product = await makeProduct(100);
-      const order = await createOrder([{ productId: product.id, quantity: 1 }], {
-        taxRateBps: 1750,
-      });
+      const order = await createOrder(
+        [{ productId: product.id, quantity: 1 }],
+        {
+          taxRateBps: 1750,
+        },
+      );
 
       expect(order.subtotalCents).toBe(100);
       expect(order.taxAmountCents).toBe(18);
@@ -333,9 +336,12 @@ describe('Orders (e2e)', () => {
 
     it('applies an explicit taxRateBps of 0 as zero-rated', async () => {
       const product = await makeProduct(10_000);
-      const order = await createOrder([{ productId: product.id, quantity: 1 }], {
-        taxRateBps: 0,
-      });
+      const order = await createOrder(
+        [{ productId: product.id, quantity: 1 }],
+        {
+          taxRateBps: 0,
+        },
+      );
 
       expect(order.taxRateBps).toBe(0);
       expect(order.taxAmountCents).toBe(0);
@@ -435,7 +441,9 @@ describe('Orders (e2e)', () => {
       const res = await get(`/api/v1/orders/${order.id}`)
         .set(authed(ownerToken))
         .expect(200);
-      expect(bodyOf<OrderDetailResponse>(res).lines[0].productName).toBe(soldAs);
+      expect(bodyOf<OrderDetailResponse>(res).lines[0].productName).toBe(
+        soldAs,
+      );
     });
   });
 
@@ -443,7 +451,9 @@ describe('Orders (e2e)', () => {
     it('allocates distinct #-prefixed numbers', async () => {
       const product = await makeProduct(1000);
       const first = await createOrder([{ productId: product.id, quantity: 1 }]);
-      const second = await createOrder([{ productId: product.id, quantity: 1 }]);
+      const second = await createOrder([
+        { productId: product.id, quantity: 1 },
+      ]);
 
       expect(first.orderNumber).toMatch(/^#\d+$/);
       expect(second.orderNumber).toMatch(/^#\d+$/);
@@ -581,9 +591,7 @@ describe('Orders (e2e)', () => {
       quantity = 1,
     ): Promise<{ order: OrderDetailResponse; productId: string }> {
       const product = await makeProduct(priceCents, 100);
-      const order = await createOrder([
-        { productId: product.id, quantity },
-      ]);
+      const order = await createOrder([{ productId: product.id, quantity }]);
       return { order: await completeOrder(order.id), productId: product.id };
     }
 
@@ -788,6 +796,81 @@ describe('Orders (e2e)', () => {
           }),
         )
         .expect(422);
+    });
+  });
+
+  /**
+   * `customerName` and `lineCount` are joined onto every order response so a sales
+   * list can render a row without a request per row. The alternative — a
+   * `GET /customers/:id` per order — is an N+1 on the busiest read in the product,
+   * so these two fields are worth a test that fails loudly if the join is dropped.
+   */
+  describe('list rows carry the customer name and line count', () => {
+    it('names the customer and counts the lines', async () => {
+      const first = await makeProduct(1000);
+      const second = await makeProduct(2500);
+      const order = await createOrder([
+        { productId: first.id, quantity: 3 },
+        { productId: second.id, quantity: 1 },
+      ]);
+
+      expect(order.customerName).toBe('Ordtest Customer');
+      // Lines, not units: four items were sold across two lines.
+      expect(order.lineCount).toBe(2);
+
+      const res = await get(
+        `/api/v1/orders?customerId=${customerId}&pageSize=100`,
+      )
+        .set(authed(ownerToken))
+        .expect(200);
+      const row = bodyOf<PaginatedEnvelope<OrderResponse>>(res).data.find(
+        (o) => o.id === order.id,
+      );
+      expect(row?.customerName).toBe('Ordtest Customer');
+      expect(row?.lineCount).toBe(2);
+    });
+
+    it('reports a null customerName for a walk-in sale', async () => {
+      const product = await makeProduct(1000);
+      const order = await createOrder(
+        [{ productId: product.id, quantity: 1 }],
+        {
+          customerId: null,
+        },
+      );
+
+      expect(order.customerId).toBeNull();
+      expect(order.customerName).toBeNull();
+      expect(order.lineCount).toBe(1);
+    });
+
+    /**
+     * The opposite of `productNameSnapshot`, deliberately: a receipt must keep
+     * saying what it said when it printed, but "whose order is this" should follow
+     * a rename, because a renamed customer is the same customer.
+     */
+    it('follows a customer rename, unlike the line name snapshot', async () => {
+      const product = await makeProduct(1000);
+      const order = await createOrder([{ productId: product.id, quantity: 1 }]);
+      const originalLineName = order.lines[0].productName;
+
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: { name: 'Ordtest Customer Renamed' },
+      });
+
+      const res = await get(`/api/v1/orders/${order.id}`)
+        .set(authed(ownerToken))
+        .expect(200);
+      const reread = bodyOf<OrderDetailResponse>(res);
+
+      expect(reread.customerName).toBe('Ordtest Customer Renamed');
+      expect(reread.lines[0].productName).toBe(originalLineName);
+
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: { name: 'Ordtest Customer' },
+      });
     });
   });
 

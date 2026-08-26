@@ -198,6 +198,11 @@ describe('AuthController (e2e)', () => {
       roleId: expect.any(String),
       tenantId: expect.any(String),
       mfaEnabled: false,
+      // The seed creates a default branch. Asserted as a string rather than
+      // `expect.anything()` because null is the failure this field exists to
+      // prevent: with no branch here, a Cashier cannot file a sale at all.
+      branchId: expect.any(String),
+      branchName: expect.any(String),
     });
   });
 

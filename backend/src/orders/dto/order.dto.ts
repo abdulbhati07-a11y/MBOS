@@ -92,6 +92,25 @@ export interface OrderResponse {
   date: string;
   branchId: string;
   customerId: string | null;
+  /**
+   * The customer's **current** name, joined on the list query; `null` for a
+   * walk-in sale.
+   *
+   * Added beyond Section 6.7's field list because without it a sales history
+   * cannot name the buyer, and the only alternative is a `GET /customers/:id` per
+   * row — an N+1 on the busiest read in the product. It is deliberately *not* a
+   * snapshot like `OrderLineResponse.productName`: a receipt must keep saying what
+   * it said when it printed, but "whose order is this" should follow a rename,
+   * because a renamed customer is the same customer.
+   */
+  customerName: string | null;
+  /**
+   * Number of lines on the order, so a list can show an item count without
+   * fetching the lines it would otherwise have to load and discard.
+   *
+   * Lines, not units: `2` here means two distinct products, not two items sold.
+   */
+  lineCount: number;
   paymentMethod: string;
   status: OrderStatus;
   taxRateBps: number;

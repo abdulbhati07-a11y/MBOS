@@ -194,6 +194,8 @@ export class AuthService {
       throw new UnauthorizedException('Account is no longer active');
     }
 
+    const branch = await this.resolveOperatingBranch();
+
     return {
       id: user.id,
       email: user.email,
@@ -201,7 +203,32 @@ export class AuthService {
       roleId: user.roleId,
       tenantId: user.tenantId,
       mfaEnabled: user.mfaEnabled,
+      branchId: branch?.id ?? null,
+      branchName: branch?.name ?? null,
     };
+  }
+
+  /**
+   * The branch a caller's writes belong to.
+   *
+   * Ordered by `isDefault` first so an explicitly marked default always wins, then
+   * by `createdAt` so a tenant whose flag was never set still gets a stable answer
+   * rather than whatever Postgres returns first — an unstable answer here would
+   * scatter one tenant's orders across branches for no visible reason.
+   *
+   * Excludes inactive and soft-deleted branches: `isActive: false` is how a branch
+   * that still has history is retired, and filing new sales against a retired
+   * branch is precisely what that flag exists to prevent.
+   */
+  private async resolveOperatingBranch(): Promise<{
+    id: string;
+    name: string;
+  } | null> {
+    return this.prisma.db.branch.findFirst({
+      where: { isActive: true, deletedAt: null },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      select: { id: true, name: true },
+    });
   }
 
   private async issueSession(
