@@ -203,13 +203,18 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 **What needs to be written:** The architectural rule that all monetary values are stored as integers (cents/minor currency units) in the database and transmitted as integers in the API. The frontend's `toFixed(2)` display pattern is correct for presentation but is currently applied to JavaScript float values (e.g. `29.99`), not to integers divided by 100.
 
-**Current state:** Every monetary field in the frontend mock data (`price`, `cost`, `total`, `subtotal`, `taxAmount`, `unitPrice`, `unitCost`, `lineTotal`) is a JavaScript `number` typed as a float. When the real API is connected, all these values must become integers in cents (`price: 2999`, `taxAmount: 425`), and the presentation layer must divide by 100 before calling `toFixed(2)`.
+**Current state:** Every monetary field in the frontend mock data (`price`, `cost`, `total`, `subtotal`, `taxAmount`, `unitPrice`, `unitCost`, `lineTotal`) is a JavaScript `number` holding **major** units — rupees, e.g. `price: 1500` for Rs 1,500. The database and API hold **minor** units, integer paisa (`priceCents: 150000`). Both halves of the boundary now exist and are named so the mismatch is visible:
 
-**Impact:** All mock-data files will need updating at API integration time. All `toFixed(2)` call sites must change to `(value / 100).toFixed(2)`. Systematic, mechanical — not a design decision — but touches every monetary display in every module.
+- `src/lib/format/currency.ts` — `formatMoney` for major units (the mock-data path), `formatMoneyMinor` for the integer paisa the API sends, and `parseMoneyToMinor` for the write direction. All ~35 inline `` `${x.toFixed(2)}` `` sites were replaced with these during the PKR conversion.
+- `backend/src/common/validation/money.ts` — `IsMoneyMinor()` rejects non-integers and enforces the int4 ceiling on the way in.
 
-**Source:** `src/lib/mock-data/orders.ts`, `src/lib/mock-data/products.ts`, `src/lib/mock-data/purchase-orders.ts` — all monetary fields. NFR-14 (fixed-point arithmetic requirement). Identified during Section 4 documentation review.
+**Impact:** Reduced from "touches every monetary display in every module" to a per-module swap. When a module moves off mock data, its display calls change from `formatMoney` to `formatMoneyMinor` and its writes go through `parseMoneyToMinor`. Note what is explicitly *not* the fix: dividing by 100 at each call site (`(value / 100).toFixed(2)`, as an earlier revision of this entry proposed) reintroduces float arithmetic on exact amounts one site at a time. `formatMoneyMinor` splits whole from fractional paisa with integer arithmetic instead.
 
-**Status:** Open — deferred to backend integration phase
+**What remains:** the mock-data files still hold major units, and the swap has not happened for any module — that is the backend-integration work itself, not debt. `parseMoneyToMinor` has no call sites yet; it exists so the first person wiring Section 6.7 does not write `Math.round(price * 100)`, which is wrong for real prices (`8.115 * 100` is `811.4999999999999`). It is also untested: the frontend has no test runner (root `package.json` has only `dev`/`build`/`start`/`lint`), so adding one is a prerequisite for covering it.
+
+**Source:** `src/lib/mock-data/orders.ts`, `src/lib/mock-data/products.ts`, `src/lib/mock-data/purchase-orders.ts` — all monetary fields. NFR-14 (fixed-point arithmetic requirement). Identified during Section 4 documentation review. Related: [DEBT-023] (the `*Cents` names), [DEBT-024].
+
+**Status:** Open — deferred to backend integration phase. The conversion boundary is built and documented; the per-module swap is not done.
 
 ---
 
@@ -339,7 +344,7 @@ This resolves each of the three problems above:
 **What needs to be written:** Four things `PATCH /billing/modules` depends on that no section defines.
 
 1. **FR-BILL-02 does not exist.** Section 6.10 says `effectiveDate` "is used to calculate proration per FR-BILL-02", but that identifier appears exactly once in the repository — in that sentence. There is no proration rule to implement: no statement of whether a mid-period enable is charged from the effective date or the period start, whether a disable refunds or credits, or how partial months round.
-2. **No per-module price exists in the schema.** Section 6.10's example returns `proratedChargeCents: 1250` for enabling `clinic`, but `Plan` prices a whole plan (`priceMonthly`, `priceAnnual`) and `PlanModule` is `{planId, moduleKey}` with no price column. Nothing in Section 5 records what an individual module costs, so the figure cannot be derived from stored data at all.
+2. **No per-module price exists in the schema.** Section 6.10's example returns `proratedChargeCents: 125000` (Rs 1,250) for enabling `clinic`, but `Plan` prices a whole plan (`priceMonthly`, `priceAnnual`) and `PlanModule` is `{planId, moduleKey}` with no price column. Nothing in Section 5 records what an individual module costs, so the figure cannot be derived from stored data at all.
 3. **No invoice to apply a charge to.** The specified message says the charge "will be applied to your next invoice", but Section 6.13 explicitly places the financial ledger (Invoice, Payment, CreditNote) out of scope, deferred to Sections 8/9 (DEBT-010). Even a correctly computed charge would have nowhere to go.
 4. **Where the pending change lives is unstated.** Section 6.10 requires a confirmation step before committing, but names no entity to hold an unconfirmed change.
 5. **`TenantModuleSubscription` cannot express more than one subscription period.** It has a single `enabledAt`/`disabledAt` pair, and Section 5.3 defines enabling as exactly "sets `disabledAt = NULL` on an existing row" — so after a disable/re-enable cycle `enabledAt` still reports the *first* time the module was ever switched on, not the start of the current period. `GET /billing/modules` therefore returns an `enabledAt` a client would misread as "enabled since". The implementation follows Section 5.3 literally rather than quietly overwriting the column. Prorating a mid-period change needs the current period's start, so this is a second, independent reason the charge cannot be derived from this table; a `TenantModuleSubscriptionPeriod` history (or an `enabledAt` that is documented as re-stamped) would fix it.
@@ -401,9 +406,11 @@ Three candidate resolutions, in decreasing order of disruption:
 
 **Risk if left open:** the plan lists are the most likely thing a future implementer would wire access control to, precisely because they *look* like an entitlement list. D-03 says they are not. A contract test or an explicit comment on `SEED_PLANS` would make the trap visible at the call site.
 
-**Source:** `backend/src/access-control/access-control.constants.ts` (`SEED_PLANS`, `CORE_MODULE_KEYS`), `backend/prisma/schema.prisma` (`Plan`, `PlanModule`, `TenantModuleSubscription`). Surfaced while reconstructing Section 1.5.1. Related: [DEBT-016], [DEBT-018], [DEBT-019].
+**Source:** `backend/src/access-control/access-control.constants.ts` (`SEED_PLANS`, `CORE_MODULE_KEYS`), `backend/prisma/schema.prisma` (`Plan`, `PlanModule`, `TenantModuleSubscription`). Surfaced while reconstructing Section 1.5.1. Related: [DEBT-016], [DEBT-018], [DEBT-019], [DEBT-023].
 
 **Status:** Open — product decision required (which of the three options). No option adopted; §1.5.1 records all three and states that the choice is product's. Nothing in code changed on account of this entry.
+
+**Note (PKR conversion):** `SEED_PLANS` no longer carries Section 6.10's literal figures. The example's 1900/4900 are US dollars, and the product is priced in PKR ([DEBT-023]), so the seed now holds Starter at Rs 4,999/month (`499_900` paisa) and Growth at Rs 12,999/month (`1_299_900`), with annual terms keeping the example's twelve-months-for-ten shape. These are FX conversions at roughly 280 PKR/USD rounded to publishable price points — **placeholders, not a pricing decision**, and this entry plus [DEBT-019] are still where the real one belongs. Two e2e assertions in `billing.controller.spec.ts` read the seeded prices, so whoever sets the real numbers changes them there too.
 
 ---
 
@@ -464,5 +471,178 @@ Option 1 is the recommendation. Option 2 is the minimum — the current text des
 **Status:** Open — spec objection, raised rather than silently overridden. Needs a product/spec decision between the three options above.
 
 ---
+
+### DEBT-023 — Every money column is named `*Cents` and the currency is the Pakistani rupee
+
+**Where it needs to land:** Section 5.10 (naming conventions), Section 5.4 and every model in Section 5 carrying a money column, and NFR-14
+
+**What needs to be written:** The currency is PKR — `TenantSettings.currencyCode` now defaults to `"PKR"` (migration `20260824042604_pkr_default_currency`, backfilled by `20260824042700_backfill_pkr_currency`). Amounts are stored as integer **paisa**, 1/100 of a rupee: `Rs 2,999` is `299900`.
+
+Section 5.10 mandates the suffix `*Cents` for monetary columns, so the schema now says `priceCents`, `costCents`, `subtotalCents`, `totalCents`, `unitPriceCents`, `lineTotalCents`, `priceMonthly`/`priceAnnual` (documented as cents), and `proratedChargeCents` — none of which hold cents. They hold minor units of whatever `currencyCode` says, which for every tenant this product is being built for is the paisa.
+
+This is a naming problem, not a behavioural one. The columns are already correct: `Int`, minor units, no floats (DEBT-012). Nothing computes wrongly. What is wrong is that a developer reading `subtotalCents` has to know the name is a lie, and the natural mistakes it invites are expensive — writing rupees into a paisa column is a 100× error, and it lands in a record BR-03 then forbids editing.
+
+Why the rename was **not** done as part of the PKR change:
+
+1. `*Cents` is what Section 5.10 specifies. Renaming the columns while the convention still says "cents" replaces one inconsistency with a different one and makes the code contradict the design document instead of merely being awkwardly named. The document has to move first.
+2. The surface is wide and financial: every money column across `Product`, `Order`, `OrderLine`, `RefundTransaction`, `PurchaseOrder`, `POLine` and `Plan`, plus the `GET`/`POST` wire shapes in Sections 6.6, 6.7, 6.9 and 6.10, the billing DTOs, and a migration. A rename of that size belongs in one deliberate change, not smuggled into a currency default.
+3. Sections 6.7–6.9 are specified but not yet implemented (`docs/section-6-api-design.md`), and they add more money fields: `subtotalCents`, `taxAmountCents`, `totalCents`, `unitPriceCents`, `amountCents` on orders and refunds, `unitCostCents` on PO lines. Renaming now and again after those land is two breaking passes over the API.
+
+**What the fix requires:**
+
+1. A decision on the replacement suffix. `*Minor` (`priceMinor`, `subtotalMinor`) is currency-neutral and stays correct if a tenant is ever configured for a currency with a different minor unit. `*Paisa` is more readable but hard-codes PKR into column names, which contradicts `currencyCode` being a per-tenant setting at all.
+2. Section 5.10 amended first, then the schema, then the wire shapes — in that order, so the code is never the thing that disagrees with the document.
+3. Best sequenced **after** Section 6.9, so orders, adjustments and purchase orders are renamed in the same pass rather than added under the old name and renamed later.
+
+**Interim state:** the *names* still say cents; everything a caller actually reads says paisa. `common/validation/money.ts` exports `MAX_MONEY_MINOR`, `MONEY_MESSAGE` and `IsMoneyMinor()`, and its 422 message reads "must be a whole number of paisa — send 299900 for Rs 2,999", so an API consumer who sends the wrong unit is told the right one in the right currency. The schema header, the money DTO doc comments and the billing wire shapes all state that the suffix is a Section 5.10 leftover and point here. So the misleading name is annotated everywhere it appears rather than silently carried.
+
+**Source:** `backend/src/common/validation/money.ts` (the NAMING paragraph), `backend/prisma/schema.prisma` (header, Section 5.10 conventions block), `backend/src/billing/dto/billing-response.dto.ts`, `backend/src/customers/dto/customer.dto.ts`, `backend/src/suppliers/dto/supplier.dto.ts`. Raised while converting prices to PKR. Related: [DEBT-012], [DEBT-024].
+
+**Status:** Open — naming vs. Section 5.10; deliberately deferred, not overlooked. Blocked on the Section 5.10 amendment and best done after Section 6.9.
+
+---
+
+### DEBT-024 — `PATCH /settings { currencyCode }` reinterprets financial history instead of converting it
+
+**Where it needs to land:** Section 6.4 (`PATCH /settings`), Section 5.4 (`TenantSettings.currencyCode`), and C-01
+
+**What needs to be written:** `currencyCode` is a freely writable tenant setting — Section 6.4 lists it in the PATCH body with no more qualification than a shape rule (ISO 4217). But every money column stores minor units of *that* currency and nothing else records what a stored integer meant when it was written. So changing the code changes the meaning of every existing row without touching its digits: a tenant with `totalCents: 299900` reading as `Rs 2,999.00` becomes one reading `$2,999.00` the moment an Owner picks USD in the settings form. Order totals, refunds and purchase orders all shift by the exchange rate at once, silently, through a 200 response.
+
+BR-03 makes this worse rather than better: the financial records whose meaning just changed are the ones that may not be edited afterwards.
+
+Section 6.4 does not say what changing the currency means, and there is no conversion endpoint anywhere in Section 6. C-01 ("one currency per tenant") is the closest thing to a rule, and read strictly it implies the currency is a setup-time choice — but nothing in the API enforces that reading.
+
+**What the fix requires — one of:**
+
+1. **Make it setup-only.** Reject the field in `PATCH /settings` once the tenant has any row in `Order`, `RefundTransaction` or `PurchaseOrder` — a 409 naming the reason. Cheapest, and matches how C-01 reads. A tenant that genuinely mis-set its currency before trading can still fix it.
+2. **Define a conversion operation.** A dedicated endpoint that takes a rate, converts every money column in one transaction, and writes an audit record of the rate and the operator. Correct, considerably more work, and needs a decision on how BR-03 tolerates a bulk rewrite of frozen records.
+3. **Store the currency per financial record** (`Order.currencyCode` and so on), so history keeps the currency it was written in and only new records use the new setting. Most faithful to what multi-currency actually means, and the largest schema change.
+
+Option 1 is the recommendation, and it is a guard rather than a feature: it stops the silent case without committing the product to multi-currency.
+
+**Interim state:** nothing enforced. The DTO comment on `currencyCode` states plainly that changing it reinterprets rather than converts, and that Section 6.4 defines no conversion path, so the hazard is documented at the point of change. `settings.e2e.spec.ts` covers the shape rules only — a currency name (`'Rupees'`) and a display symbol (`'Rs'`) are both 422 — not the history question, which needs Section 6.7 order fixtures to test.
+
+**Source:** `backend/src/settings/dto/update-settings.dto.ts` (`currencyCode`), `backend/prisma/schema.prisma` (`TenantSettings`). Raised while converting prices to PKR. Related: [DEBT-023], [DEBT-012].
+
+**Status:** Open — real data-integrity hazard reachable through a specified endpoint today. Needs a product decision; option 1 is implementable now.
+
+---
+
+### DEBT-025 — Section 6.7 says a client-submitted order total is "silently ignored"; the API refuses it with `422`
+
+**Where it needs to land:** Section 6.7 (`POST /orders`, "Server-computed fields"), and Section 6.1's validation conventions
+
+**What needs to be written:** Section 6.7 states: "If client-submitted totals are present in the body, they are silently ignored." The implementation does the opposite. `CreateOrderDto` does not declare `subtotalCents`, `taxAmountCents` or `totalCents`, and the global `ApiValidationPipe` runs with `forbidNonWhitelisted: true`, so a body carrying any of them is rejected with a `422` naming the offending field. Same for `unitPriceCents` on a line.
+
+The departure is deliberate, and the reason is BR-03. A silent ignore answers `201 Created` to a client that submitted `totalCents: 5000`. That client has no way to distinguish "we accepted your total" from "we discarded it and computed our own", and the natural reading of a `201` is the first one. The record it just created is a financial transaction that BR-03 forbids editing afterwards — so the one place the API should be loudest about a misunderstanding is the one place the section asks it to be silent.
+
+Refusing is also what the rest of the codebase already does with a server-owned field: `PATCH /products/:id` does not accept `stock`, and a client that sends it gets a `422` rather than a `200` that quietly dropped it (Section 6.6, line 403). Making orders the single exception would mean the money path is the *least* strict surface in the API.
+
+**A second, smaller mismatch in the same section:** Section 6.7 says that after `status = 'Completed'`, the financial columns are locked and "any attempt to modify them returns `409`". No route exists through which to attempt it — there is no `PATCH /orders/:id`, and `PATCH /orders/:id/status` accepts only `{ "status": "Completed" }`. So the lock is structural rather than a runtime check, and a client that tries gets `404` (no such route) or `422` (unrecognised field), never the `409` the section promises. The guarantee holds; the status code in the document does not describe any reachable response.
+
+**What the fix requires:** amend Section 6.7 to specify the refusal — `422` with the field named — and drop "silently ignored". Then correct the `409` claim to describe the absence of a write route, or specify a route that would produce the `409` (there is no reason to add one).
+
+**Interim state:** the departure is annotated at both the code and the test. `backend/src/orders/dto/order.dto.ts` states it in the file header with the BR-03 reasoning; `orders.e2e.spec.ts` asserts the `422` for each of the three total fields and for `unitPriceCents`, with a comment pointing here. So the behaviour is pinned by tests and the divergence is discoverable from either side.
+
+**Source:** `backend/src/orders/dto/order.dto.ts` (header, items 1 and 2), `backend/src/orders/orders.e2e.spec.ts` (the `it.each` over the three total fields), `docs/section-6-api-design.md` §6.7. Raised while implementing Section 6.7. Related: [DEBT-026], [DEBT-027].
+
+**Status:** Open — implemented behaviour deliberately contradicts the section's wording. Needs the section amended, not the code.
+
+---
+
+### DEBT-026 — Completing an order moves stock, and Section 6.7 does not say so
+
+**Where it needs to land:** Section 6.7 (`PATCH /orders/:id/status`), cross-referenced from FR-SALE-04, BR-02 and Section 6.8
+
+**What needs to be written:** Section 6.7 describes the completion transition purely as a status change: "Transitions `Order.status` from `Pending` to `Completed`." It says nothing about inventory. FR-SALE-04 and BR-02 do: completing a sale decrements the stock of every product sold, and stock only ever changes through an audited writer. The requirement wins over the section's silence, so `PATCH /orders/:id/status` does considerably more than the section describes:
+
+1. Re-reads the order **inside** the transaction and refuses with `409` unless it is still `Pending`, so two concurrent completions cannot both take stock.
+2. Sums quantities **per product** across the lines first — the same product may appear on two lines, and decrementing each line separately would under-count.
+3. Decrements `Product.stock` for each product, then asserts the returned value is `>= 0` and rolls the whole transaction back if not.
+4. Writes one `StockAdjustment` per product (`type: 'REMOVE'`, `reasonCode: 'Sale'`, `quantityDelta` negative, `newStockLevel` taken from what the update returned, `createdByUserId` from the request context), so BR-02's audit trail covers sales and not just manual adjustments.
+5. Sets `status = 'Completed'` last.
+
+All five happen in one `$transaction`. That matters for the failure case, which the section also does not specify: **an order whose lines exceed available stock cannot be completed, and the attempt returns `409` with nothing changed** — stock intact, order still `Pending`, no adjustment rows written. The alternative was to allow the decrement to go negative and let a stock-take correct it later, which was rejected: a negative count is not a state any report in Section 6.9 can interpret, and BR-03 does not apply here (an uncompleted order is not yet a posted transaction), so refusing costs nothing that allowing would preserve.
+
+The section needs to state the side effect, the ordering, the `409` on insufficient stock, and the `409` on a non-`Pending` order — because a client that reads only §6.7 has no reason to expect that a status change can fail for an inventory reason.
+
+**Interim state:** implemented and covered. `orders.e2e.spec.ts` asserts the decrement, the single `Sale` adjustment row, the two-lines-one-product aggregation, the insufficient-stock `409` with all three no-change assertions, and the double-completion `409` proving stock is not taken twice. The service header names FR-SALE-04 as the authority that overrides the section's silence.
+
+**Source:** `backend/src/orders/orders.service.ts` (`updateStatus`, and the service header's third bullet), `backend/src/orders/orders.e2e.spec.ts`. Raised while implementing Section 6.7. Related: [DEBT-025], [DEBT-027], [DEBT-002].
+
+**Status:** Open — code implements a requirement the API section omits. Needs Section 6.7 amended to match FR-SALE-04.
+
+---
+
+### DEBT-027 — Section 6.7's refund endpoint has no upper bound, no status precondition, and no stated effect on stock
+
+**Where it needs to land:** Section 6.7 (`POST /orders/:id/refund`), cross-referenced from BR-03 and Section 6.8's `Returned` reason code
+
+**What needs to be written:** Section 6.7 says partial refunds are allowed, repeated refunds are allowed, and `status = 'Refunded'` means "at least one refund exists — not necessarily fully refunded." It does not say what bounds any of it. Three questions the implementation had to answer:
+
+1. **How much can be refunded in total?** The sum of an order's refunds is capped at `Order.totalCents`. A refund of more than was charged is not a refund, and BR-03 leaves no way to correct one after the fact. Each request aggregates `RefundTransaction.amountCents` for the order and refuses with `409` if the new amount exceeds what remains, naming the remaining figure. Without this, repeated partial refunds have no ceiling at all — "multiple refunds are permitted" read literally allows refunding an order indefinitely.
+2. **Can a `Pending` order be refunded?** No — `409`. A `Pending` order has taken no money and moved no stock, so there is nothing to reverse. An already-`Refunded` order *stays* refundable, because that is exactly the partial-refund case the section does allow.
+3. **Does a refund restore stock?** No, deliberately. A v1 `RefundTransaction` is an order-level amount with no line attribution — the model has no `OrderLine` FK, which Section 5.11 defers to v2 — so the server cannot know which goods came back or how many. Inferring a quantity from the amount would corrupt the count BR-02 exists to keep honest. Goods physically returned are booked through `POST /inventory/adjustments` with `reasonCode: 'Returned'` (§6.8), which is why that reason code exists as something distinct from `Sale`. The section should say this outright, because "creates a `RefundTransaction` and sets status" reads as though the reversal is complete, and an implementer of the frontend refund flow needs to know a second action is required.
+
+**What the fix requires:** state the three rules in §6.7 with their status codes, and add the pointer to §6.8's `Returned` path so the money reversal and the goods reversal are documented as two steps rather than one.
+
+**Interim state:** all three implemented inside one `$transaction` and covered by `orders.e2e.spec.ts` — accumulating partial refunds, the overshoot `409`, the `Pending` `409`, and an assertion that stock is unchanged after a refund. The service's `refund` doc comment carries the reasoning for the stock decision and names the `Returned` alternative.
+
+**Source:** `backend/src/orders/orders.service.ts` (`refund` — the doc comment and the two `ConflictException`s), `backend/src/orders/orders.e2e.spec.ts`. Raised while implementing Section 6.7. Related: [DEBT-025], [DEBT-026].
+
+**Status:** Open — under-specified endpoint; the code chose bounds the section leaves open. Needs Section 6.7 amended to record them.
+
+---
+
+### DEBT-028 — `quantityDelta` means three different things, and Section 6.8 documents only one of them
+
+**Where it needs to land:** Section 6.8 (`POST /api/v1/inventory/adjustments`), cross-referenced from Section 5's `StockAdjustment` model and from Section 6.7's completion path
+
+**What needs to be written:** The field carries three distinct meanings, and a reader of §6.8 can only work out one of them:
+
+1. **On the wire, for `ADD`/`REMOVE`, it is an unsigned magnitude and `type` carries the sign.** §6.8's own request example is `{"type": "REMOVE", "quantityDelta": 5}` — positive five, on a removal — so this reading is at least implied by the example. A client never sends a negative number; one that tries is refused with `422`.
+2. **In the column it is signed.** That same request stores `-5`. The schema comment says so ("positive for ADD/COUNT increase; negative for REMOVE"), and Section 6.7's completion path already writes it that way (`quantityDelta: -quantity`) so both writers of `Product.stock` agree. §6.8 never mentions the conversion, so read on its own it says the stored value is `5` — which would make the audit log sum to the opposite of the truth.
+3. **For `COUNT` it is neither** — it is the absolute new stock level, and the stored delta is `quantityDelta - currentStock`, which may be negative, positive or zero. §6.8 *does* state this one, and it is the reason a bare `@Min(1)` would be wrong: a stock take may legitimately find an empty shelf, so `0` is a valid `COUNT`.
+
+The hazard is specifically in (2), because an implementation that gets it backwards still returns plausible responses. A `newStockLevel` of `5` after removing `5` from `10` is correct whichever sign was stored; the error surfaces only later, when someone sums `quantityDelta` over a date range to reconcile shrinkage and gets a number with the wrong sign.
+
+**There is also a frontend field-name seam.** `src/components/inventory/StockAdjustmentDialog.tsx` sends a field named **`quantity`** (positive magnitude), not `quantityDelta`. The API refuses `quantity` outright — `forbidNonWhitelisted` makes an unknown property a `422` — so the mock-data swap for the Inventory module must rename the field at the boundary. That is a genuine rename rather than a formatting difference, and it is the kind of mismatch discovered at runtime rather than at compile time, because the dialog's form state is local and not typed against the API.
+
+**What the fix requires:** state all three readings in §6.8 in the terms above, say explicitly that the server converts the wire magnitude into a signed column value, and note that a client-sent negative is a `422`. Then either rename the dialog's field to `quantityDelta` or record the mapping in whatever API-client layer the swap introduces.
+
+**Interim state:** implemented and covered. `backend/src/inventory/dto/inventory.dto.ts` carries the three readings in its header comment as the current best description, and `inventory.e2e.spec.ts`'s `quantityDelta sign` and `COUNT` blocks assert the **stored** value directly — not just the response — including the negative, positive and zero `COUNT` deltas. The frontend still sends `quantity`; nothing was changed there, because that dialog is still driven by mock data.
+
+**Source:** `backend/src/inventory/dto/inventory.dto.ts` (header comment), `backend/src/inventory/inventory.service.ts` (`create`), `backend/src/inventory/inventory.e2e.spec.ts`, `src/components/inventory/StockAdjustmentDialog.tsx`. Raised while implementing Section 6.8. Related: [DEBT-012], [DEBT-026].
+
+**Status:** Open — the section documents one of three meanings of its own field. Needs §6.8 amended; the code is correct and tested.
+
+---
+
+### DEBT-029 — Section 6.8 says how an adjustment succeeds and never says how one is refused
+
+**Where it needs to land:** Section 6.8 (`POST /api/v1/inventory/adjustments`, and a note on `GET /api/v1/inventory/alerts`)
+
+**What needs to be written:** §6.8 describes the happy path in three sentences and specifies exactly one status code (`201`). Five refusals and one structural property had to be decided in code:
+
+1. **Insufficient stock is `409`, with nothing changed.** PROV-BR-07 (stock may not go negative) is enforced server-side; the message names the quantity actually available. `StockAdjustmentDialog.tsx:75` already checks it, but that is a UX affordance, not a guarantee — the same client-affordance-versus-guarantee split DEBT-002 draws for PO transitions. Note this binds `REMOVE` only: `COUNT` is absolute, so counting `1` against a believed `100` is a legitimate stock take, not a conflict.
+2. **`Sale` and `PurchaseReceived` are not client-submittable — `422`.** The column permits six reason codes; a client may send four (`Received`, `Returned`, `Damaged`, `Correction`). The other two are written by the system when an order completes (§6.7) or a PO is received (§6.9). Accepting them here would let a user file a sale-shaped audit row with no order behind it, which defeats the reconciliation the audit log exists to make possible. §6.8 never enumerates the set at all — its example just happens to use `Damaged`.
+3. **A zero-quantity `ADD` or `REMOVE` is `422`.** It changes nothing and would leave a meaningless row in an append-only log. Zero is accepted for `COUNT`, where it means the shelf is empty (see DEBT-028).
+4. **A bad `productId` or `branchId` in the body is `422`, not `404`.** The addressed resource is the adjustment collection, which exists; the body is what is wrong — the same reading `users.service.ts` takes for a bad `roleId`. A soft-deleted product or branch is refused the same way, but an **inactive** product is still adjustable, because a retired product line's remaining stock still has to be written off.
+5. **A single adjustment is capped, and so is the resulting level.** `Product.stock` is `int4`, so an `ADD` that would carry it past 2,147,483,647 is `422` rather than a Postgres overflow, and one adjustment is bounded at 1,000,000 units — a figure above that is far likelier to be a misplaced decimal point than a delivery, and unlike an order an adjustment can be corrected afterwards, so refusing costs the operator little.
+6. **The log is append-only.** There is no `PATCH` and no `DELETE` on an adjustment, and no service method for either; a wrong adjustment is corrected by filing a compensating one. That is what keeps the log a history rather than a mutable opinion about the current count (BR-02). §6.8 does not say it, so the absence reads as an oversight rather than a decision — §6.7 makes the equivalent point explicitly under "No DELETE /api/v1/orders/:id", which is the pattern to follow.
+
+**Also worth a line:** `GET /inventory/alerts` caps each array at 200 and orders `lowStock` scarcest-first, so a truncated list drops the least urgent rather than an arbitrary tail. The two buckets §6.8 already defines are disjoint, which is deliberate and differs from `GET /products?lowStock=true`'s looser `stock <= reorderPoint` — right for a filter, wrong for a widget that shows both counts side by side and would otherwise double-report a product sitting at zero.
+
+**What the fix requires:** add a refusals list to §6.8 with the status codes above, enumerate the client-submittable reason codes and name the two that are system-only, and add a "No PATCH or DELETE on an adjustment" subsection in the shape §6.7 already uses for orders.
+
+**Interim state:** all six implemented; `inventory.e2e.spec.ts` covers each, including that a refused adjustment leaves no audit row and no stock change, that an inactive product is still adjustable while a soft-deleted one is not, and that `PATCH`/`DELETE` on an adjustment return `404`.
+
+**Source:** `backend/src/inventory/inventory.service.ts`, `backend/src/inventory/inventory.controller.ts` (header comment), `backend/src/inventory/dto/inventory.dto.ts`, `backend/src/inventory/inventory.e2e.spec.ts`. Raised while implementing Section 6.8. Related: [DEBT-002], [DEBT-026], [DEBT-028].
+
+**Status:** Open — code implements six rules the section omits. Needs §6.8 amended to record them.
+
+---
+
+## Resolved
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*
