@@ -261,7 +261,8 @@ export default function DashboardPage() {
             <CardTitle>Recent Orders</CardTitle>
             <CardDescription>
               5 most recent sales orders.
-              Orders marked "(unlinked)" were created via POS without a customer
+              Orders marked &ldquo;(unlinked)&rdquo; were created via POS without a
+              customer
               selection — they show the entered name but are not linked to a
               CustomerRecord. (DEBT-004)
             </CardDescription>

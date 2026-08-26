@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useForm } from "react-hook-form"
+import { useForm, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { supplierSchema, SupplierValues } from "@/lib/validation/purchases"
 import { SupplierRecord } from "@/lib/mock-data/suppliers"
@@ -58,8 +58,10 @@ export function SupplierDrawer({
   }
 
   const form = useForm<SupplierValues>({
-    // as any: known zodResolver + Zod v4 interop gap (same pattern as inventory)
-    resolver: zodResolver(supplierSchema) as any,
+    // Asserted, not assigned: the schema's input type differs from its output type
+    // (Zod v4 optional/coerce fields), so RHF cannot take the resolver directly.
+    // `Resolver<SupplierValues>` narrows the assertion to one shape, unlike `any`.
+    resolver: zodResolver(supplierSchema) as unknown as Resolver<SupplierValues>,
     defaultValues: supplier
       ? {
           name: supplier.name,

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useForm, useFieldArray } from "react-hook-form"
+import { useForm, useFieldArray, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { newPOSchema, NewPOValues } from "@/lib/validation/purchases"
 import { MOCK_PRODUCTS } from "@/lib/mock-data/products"
@@ -44,8 +44,10 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
   const [selectedProductId, setSelectedProductId] = React.useState<string>("")
 
   const form = useForm<NewPOValues>({
-    // as any: known zodResolver + Zod v4 interop gap (same pattern as sales)
-    resolver: zodResolver(newPOSchema) as any,
+    // Asserted, not assigned: `z.coerce.number()` types its input as `unknown`, so
+    // the schema's input type is not `NewPOValues`. `Resolver<NewPOValues>` narrows
+    // the assertion to one shape rather than using `any`.
+    resolver: zodResolver(newPOSchema) as unknown as Resolver<NewPOValues>,
     defaultValues: {
       supplierName: "",
       notes: "",
@@ -286,10 +288,12 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
           )}
         </div>
 
-        {/* Zod error for empty lines */}
-        {(form.formState.errors.lines as any)?.message && (
+        {/* Zod error for empty lines. Both spellings are checked because RHF puts
+            an array-level message on `.root` in current versions and on `.message`
+            in older ones; whichever is populated, the operator sees it. */}
+        {form.formState.errors.lines?.message !== undefined && (
           <p className="text-sm text-destructive">
-            {(form.formState.errors.lines as any).message}
+            {form.formState.errors.lines.message}
           </p>
         )}
         {form.formState.errors.lines?.root && (

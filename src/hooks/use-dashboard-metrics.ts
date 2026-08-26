@@ -17,7 +17,6 @@ import { OrderRecord } from "@/lib/mock-data/orders"
 import { MOCK_CUSTOMERS } from "@/lib/mock-data/customers"
 import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
 import { MOCK_PURCHASE_ORDERS, PO_TRANSITIONS, POStatus } from "@/lib/mock-data/purchase-orders"
-import { ProductRecord } from "@/lib/mock-data/products"
 import { useProducts } from "@/contexts/products-context"
 import { useOrders } from "@/contexts/orders-context"
 

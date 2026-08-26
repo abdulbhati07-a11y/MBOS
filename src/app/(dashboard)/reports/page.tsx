@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { ColumnDef } from "@tanstack/react-table"
-import { Lock, AlertTriangle } from "lucide-react"
+import { Lock } from "lucide-react"
 
 import { PageHeader } from "@/components/shared/PageHeader"
 import { DataTable } from "@/components/shared/DataTable"
@@ -44,13 +44,6 @@ const ORDER_STATUS_VARIANTS: Record<OrderStatus, "success" | "warning" | "destru
   Completed: "success",
   Pending:   "warning",
   Refunded:  "destructive",
-}
-
-// ---------------------------------------------------------------------------
-// Helper — format date input value to/from ISO
-// ---------------------------------------------------------------------------
-function toDateInputValue(iso: string): string {
-  return iso.slice(0, 10)
 }
 
 // ---------------------------------------------------------------------------
