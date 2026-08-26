@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { PurchaseOrderRecord, POStatus } from "@/lib/mock-data/purchase-orders"
+import { formatMoney } from "@/lib/format/currency"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import {
   Dialog,
@@ -82,9 +83,9 @@ export function PODetailDialog({ open, onOpenChange, po }: PODetailDialogProps) 
               {po.lines.map((line, idx) => (
                 <TableRow key={`${line.productId}-${idx}`}>
                   <TableCell className="font-medium">{line.productName}</TableCell>
-                  <TableCell className="text-right">${line.unitCost.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(line.unitCost)}</TableCell>
                   <TableCell className="text-right">{line.quantity}</TableCell>
-                  <TableCell className="text-right">${line.lineTotal.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(line.lineTotal)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -95,11 +96,11 @@ export function PODetailDialog({ open, onOpenChange, po }: PODetailDialogProps) 
         <div className="rounded-md bg-muted p-3 text-sm space-y-1.5">
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
-            <span>${po.subtotal.toFixed(2)}</span>
+            <span>{formatMoney(po.subtotal)}</span>
           </div>
           <div className="flex justify-between font-semibold border-t pt-1.5 mt-1.5">
             <span>Total</span>
-            <span>${po.total.toFixed(2)}</span>
+            <span>{formatMoney(po.total)}</span>
           </div>
         </div>
 

@@ -8,7 +8,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
-import { IsCents } from '../../common/validation/money';
+import { IsMoneyMinor } from '../../common/validation/money';
 import {
   IsOptionalBooleanQuery,
   IsOptionalSearchQuery,
@@ -20,10 +20,12 @@ import {
  *
  * That schema has `price` and `cost` as floats (`z.coerce.number()`), matching
  * `MOCK_PRODUCTS`, where a mouse costs `29.99`. The columns are `priceCents` and
- * `costCents` (`Int`, DEBT-012). This DTO takes the *cents*, so a caller that has
- * not converted gets a 422 naming the field instead of a row that is off by two
- * orders of magnitude. See `common/validation/money.ts` for why rounding-on-input
- * is refused rather than offered.
+ * `costCents` (`Int`, DEBT-012) and hold minor units — paisa for a PKR tenant,
+ * whatever `TenantSettings.currencyCode` says otherwise (the `Cents` suffix is a
+ * naming leftover, DEBT-023). This DTO takes those *minor units*, so a caller
+ * that has not converted gets a 422 naming the field instead of a row that is off
+ * by two orders of magnitude. See `common/validation/money.ts` for why
+ * rounding-on-input is refused rather than offered.
  *
  * `stock` is absent from both create and update on purpose — see below.
  */
@@ -86,10 +88,10 @@ export class CreateProductDto {
   @MaxLength(100)
   category!: string;
 
-  @IsCents()
+  @IsMoneyMinor()
   priceCents!: number;
 
-  @IsCents()
+  @IsMoneyMinor()
   costCents!: number;
 
   @IsString()
@@ -150,11 +152,11 @@ export class UpdateProductDto {
   category?: string;
 
   @IsOptional()
-  @IsCents()
+  @IsMoneyMinor()
   priceCents?: number;
 
   @IsOptional()
-  @IsCents()
+  @IsMoneyMinor()
   costCents?: number;
 
   @IsOptional()

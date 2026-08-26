@@ -71,13 +71,15 @@ All errors use this shape regardless of HTTP status code:
 
 ### Monetary Values
 
-All monetary fields in request and response bodies are integers in cents — never floats (DEBT-012, Section 4.6). The field naming convention mirrors Section 5's `*Cents` suffix:
+All monetary fields in request and response bodies are integers in the tenant currency's **minor units** — never floats (DEBT-012, Section 4.6). The tenant currency is `TenantSettings.currencyCode`, which defaults to `PKR`, so the minor unit is the paisa: `299900` is Rs 2,999.00. The field naming convention mirrors Section 5's `*Cents` suffix, which predates the currency choice and is a misnomer for PKR — see DEBT-023.
 
 ```json
-{ "priceCents": 2999, "totalCents": 26999 }
+{ "priceCents": 150000, "totalCents": 1350000 }
 ```
 
-The frontend divides by 100 before calling `.toFixed(2)` for display. No monetary float values cross the API boundary in either direction.
+No monetary float values cross the API boundary in either direction. The frontend formats these through `formatMoneyMinor` in `src/lib/format/currency.ts`, which splits whole from fractional units with integer arithmetic — not by dividing by 100 and calling `.toFixed(2)`, which would put a float back on an amount that arrived exact. Writes convert with `parseMoneyToMinor`, on the digit string rather than via `Math.round(value * 100)`.
+
+Values are capped at 2,147,483,647 (int4), or Rs 21,474,836.47. Exceeding it is a `422` naming the limit, not a `500` from the driver.
 
 ### Rate Limiting *(DEBT-013 — thresholds TBD)*
 
@@ -278,13 +280,15 @@ Returns `TenantSettings` for the current tenant. Called at session start to pre-
 ```json
 {
   "companyName": "Acme Corp",
-  "defaultTaxRateBps": 800,
-  "currencyCode": "USD",
-  "timezone": "America/New_York"
+  "defaultTaxRateBps": 1700,
+  "currencyCode": "PKR",
+  "timezone": "Asia/Karachi"
 }
 ```
 
-`defaultTaxRateBps` is in basis points (800 = 8.00%). The frontend converts to percentage for display: `(defaultTaxRateBps / 100).toFixed(2) + '%'`.
+`defaultTaxRateBps` is in basis points (1700 = 17.00%, Pakistan's standard GST rate). The frontend converts to percentage for display: `(defaultTaxRateBps / 100).toFixed(2) + '%'`.
+
+Note that the shipped column defaults are `0` for `defaultTaxRateBps` and `UTC` for `timezone`, not the values shown above — a tax rate applied without the tenant having chosen it would land in records BR-03 forbids editing, and UTC is the storage default that also has to serve non-PK tenants. The example shows a configured tenant, not a fresh one.
 
 ### PATCH /api/v1/settings
 
@@ -430,7 +434,7 @@ Creates an order with line items. Requires `sales.write`.
   "customerId": "uuid-or-null",
   "branchId": "uuid",
   "paymentMethod": "Cash",
-  "taxRateBps": 800,
+  "taxRateBps": 1700,
   "lines": [
     { "productId": "uuid", "quantity": 2 }
   ]
@@ -459,7 +463,7 @@ Requires `sales.refund` permission — not `sales.write` or `sales.delete`. The 
 
 **Request:**
 ```json
-{ "amountCents": 2999, "reason": "Customer returned item" }
+{ "amountCents": 150000, "reason": "Customer returned item" }
 ```
 
 `amountCents` may be less than `Order.totalCents` (partial refund). Multiple refunds on the same order are permitted — each creates a new `RefundTransaction` row. `Order.status = 'Refunded'` means "at least one refund exists" — not necessarily fully refunded.
@@ -600,9 +604,9 @@ Enables or disables a module. Effect is immediate — the next request from any 
 {
   "moduleKey": "clinic",
   "enabled": true,
-  "proratedChargeCents": 1250,
+  "proratedChargeCents": 125000,
   "effectiveDate": "2026-08-01",
-  "message": "Module will be enabled. A prorated charge of $12.50 will be applied to your next invoice."
+  "message": "Module will be enabled. A prorated charge of Rs 1,250.00 will be applied to your next invoice."
 }
 ```
 
@@ -615,7 +619,7 @@ Returns the current `TenantSubscription` with plan details. Readable with `setti
 **Response:**
 ```json
 {
-  "plan": { "name": "Growth", "priceMonthly": 4900 },
+  "plan": { "name": "Growth", "priceMonthly": 1299900 },
   "status": "Active",
   "currentPeriodStart": "2026-08-01T00:00:00Z",
   "currentPeriodEnd": "2026-08-31T23:59:59Z"
@@ -633,13 +637,13 @@ Returns available plans with included modules. Public within the authenticated t
     {
       "id": "...",
       "name": "Starter",
-      "priceMonthly": 1900,
+      "priceMonthly": 499900,
       "modules": ["dashboard", "inventory", "sales", "customers"]
     },
     {
       "id": "...",
       "name": "Growth",
-      "priceMonthly": 4900,
+      "priceMonthly": 1299900,
       "modules": ["dashboard", "inventory", "sales", "customers", "purchases", "reports"]
     }
   ]
@@ -692,7 +696,7 @@ Items whose **resolution path is fully specified** by Section 6 (endpoint contra
 | DEBT-008 — Company profile tax rate | `GET /settings` returns `defaultTaxRateBps`; `NewOrderForm` pre-fills from this |
 | DEBT-009 — Reports export | `?format=csv` on report endpoints; PDF deferred |
 | DEBT-011 — MOCK_ORDERS static *(resolved in code; API replaces context)* | `GET /orders` replaces `OrdersContext`; all consumers require no shape changes |
-| DEBT-012 — Float monetary values | All API bodies use `*Cents` integers; frontend divides by 100 for display |
+| DEBT-012 — Float monetary values | All API bodies use `*Cents` integers holding minor units; frontend formats via `src/lib/format/currency.ts` |
 
 Items not addressed here (genuinely deferred to other sections):
 

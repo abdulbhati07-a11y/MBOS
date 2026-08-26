@@ -21,6 +21,7 @@ import {
 } from "@/lib/mock-data/customers"
 import { CustomerValues } from "@/lib/validation/customers"
 import { useOrders } from "@/contexts/orders-context"
+import { formatMoney } from "@/lib/format/currency"
 
 // TODO: NewOrderForm.customerName is free-text and unlinked to CustomerRecord;
 // linking is deferred to backend integration phase.
@@ -166,7 +167,7 @@ export default function CustomersPage() {
             const spend = orders
               .filter((o) => o.customerId === row.original.id)
               .reduce((s, o) => s + o.total, 0)
-            return `$${spend.toFixed(2)}`
+            return formatMoney(spend)
           },
         },
         {

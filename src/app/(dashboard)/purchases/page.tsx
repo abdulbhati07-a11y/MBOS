@@ -18,6 +18,7 @@ import { Modules, Actions } from "@/config/permissions"
 import { SupplierDrawer } from "@/components/purchases/SupplierDrawer"
 import { PODetailDialog } from "@/components/purchases/PODetailDialog"
 import { NewPOForm } from "@/components/purchases/NewPOForm"
+import { formatMoney } from "@/lib/format/currency"
 
 import {
   MOCK_SUPPLIERS,
@@ -299,7 +300,7 @@ export default function PurchasesPage() {
         accessorKey: "total",
         header: "Total",
         cell: ({ row }) => (
-          <span className="font-medium">${row.original.total.toFixed(2)}</span>
+          <span className="font-medium">{formatMoney(row.original.total)}</span>
         ),
       },
       {

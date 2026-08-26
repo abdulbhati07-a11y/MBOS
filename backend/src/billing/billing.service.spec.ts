@@ -89,11 +89,11 @@ describe('BillingService', () => {
         status: 'Active',
         currentPeriodStart: new Date('2026-08-01T00:00:00.000Z'),
         currentPeriodEnd: new Date('2026-08-31T23:59:59.000Z'),
-        plan: { name: 'Growth', priceMonthly: 4900 },
+        plan: { name: 'Growth', priceMonthly: 1_299_900 },
       });
 
       await expect(service.getSubscription()).resolves.toEqual({
-        plan: { name: 'Growth', priceMonthly: 4900 },
+        plan: { name: 'Growth', priceMonthly: 1_299_900 },
         status: 'Active',
         currentPeriodStart: '2026-08-01T00:00:00.000Z',
         currentPeriodEnd: '2026-08-31T23:59:59.000Z',
@@ -107,7 +107,7 @@ describe('BillingService', () => {
         {
           id: 'plan-1',
           name: 'Starter',
-          priceMonthly: 1900,
+          priceMonthly: 499_900,
           modules: [{ moduleKey: 'sales' }, { moduleKey: 'inventory' }],
         },
       ]);
@@ -116,7 +116,7 @@ describe('BillingService', () => {
         {
           id: 'plan-1',
           name: 'Starter',
-          priceMonthly: 1900,
+          priceMonthly: 499_900,
           modules: ['sales', 'inventory'],
         },
       ]);

@@ -7,7 +7,7 @@ import { PasswordService } from '../auth/password.service';
 import { PaginatedEnvelope } from '../common/dto/pagination.dto';
 import { ApiExceptionFilter } from '../common/filters/http-exception.filter';
 import { ApiValidationPipe } from '../common/pipes/api-validation.pipe';
-import { MAX_MONEY_CENTS } from '../common/validation/money';
+import { MAX_MONEY_MINOR } from '../common/validation/money';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitConfig } from '../rate-limit/rate-limit.config';
 import { ProductResponse } from './dto/product.dto';
@@ -220,7 +220,7 @@ describe('Products (e2e)', () => {
       await post('/api/v1/products')
         .set(authed(ownerToken))
         .send(
-          validBody(`HUGE${SKU_MARKER}`, { priceCents: MAX_MONEY_CENTS + 1 }),
+          validBody(`HUGE${SKU_MARKER}`, { priceCents: MAX_MONEY_MINOR + 1 }),
         )
         .expect(422);
     });

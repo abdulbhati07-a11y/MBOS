@@ -195,11 +195,11 @@ These rules are stated here because they are architectural constraints that ever
 
 ### Storage
 
-All monetary values are stored as **integers representing the smallest currency unit** (cents for USD, pence for GBP, etc.) in PostgreSQL. No `FLOAT`, `REAL`, or `NUMERIC` columns for monetary values — `INTEGER` only.
+All monetary values are stored as **integers representing the smallest currency unit** (paisa for the default PKR, cents for USD, pence for GBP, etc.) in PostgreSQL. No `FLOAT`, `REAL`, or `NUMERIC` columns for monetary values — `INTEGER` only.
 
 ```sql
 -- ✅ CORRECT
-price_cents    INTEGER NOT NULL  -- 2999 = $29.99
+price_cents    INTEGER NOT NULL  -- 299900 = Rs 2,999.00
 tax_amount_cents INTEGER NOT NULL
 
 -- ❌ FORBIDDEN
@@ -207,7 +207,11 @@ price          DECIMAL(10,2)  -- floating-point representation issues
 total          FLOAT           -- never for money
 ```
 
-**Current frontend gap (DEBT-012):** The frontend mock data stores monetary values as JavaScript floats (e.g. `price: 29.99`). When the real API is connected, these become integers in cents (`price: 2999`), and every `toFixed(2)` call site must change to `(value / 100).toFixed(2)`. This is a systematic, mechanical migration — all monetary display in all modules is affected.
+Note the column names: `*_cents` is the convention this section fixed before the currency was chosen, and the columns hold minor units of whichever currency the tenant is configured for — paisa, not cents. The mismatch is tracked as DEBT-023.
+
+`INTEGER` is int4, so the ceiling is 2,147,483,647 minor units. In cents that is $21.4M and effectively unreachable for an SMB; in paisa it is Rs 21,474,836.47, and a large wholesale purchase order can approach it — a currency with a ~280:1 rate against USD spends two of int4's digits on the exchange rate alone. The API caps at that value and returns a 422 naming the limit rather than letting the driver raise "value out of range for type integer" as a 500. If a PO total ever needs to exceed it, the column has to widen to `BIGINT`.
+
+**Current frontend gap (DEBT-012):** The frontend mock data holds monetary values as JavaScript numbers in **major** units (e.g. `price: 1500` meaning Rs 1,500), because that is what a user types. The API holds minor units (`priceCents: 150000`). Both sides of the boundary are named so a missed conversion is visible rather than silent: `formatMoney` (major) and `formatMoneyMinor` (minor) for display, `parseMoneyToMinor` for writes — all in `src/lib/format/currency.ts` — and `IsMoneyMinor()` in `backend/src/common/validation/money.ts` rejecting fractional values on the way in. Conversion must be done on the digit string, never as `Math.round(value * 100)`: `8.115 * 100` is `811.4999999999999` in binary floating point, which rounds a paisa short into a record BR-03 then forbids correcting.
 
 ### Arithmetic
 
@@ -215,7 +219,9 @@ All monetary arithmetic in the Application and Domain layers uses a fixed-point 
 
 ### Display
 
-`toFixed(2)` is a **Presentation-layer concern only**. It formats a computed floating-point result for display. It does not fix the underlying value — applying `toFixed(2)` to a stored float and saving the result back would corrupt the data. The frontend build's consistent use of `toFixed(2)` at all display sites is correct for the current mock-data phase.
+`toFixed(2)` is a **Presentation-layer concern only**. It formats a computed floating-point result for display. It does not fix the underlying value — applying `toFixed(2)` to a stored float and saving the result back would corrupt the data.
+
+As of the PKR conversion the frontend no longer calls `toFixed(2)` inline for money at all. Roughly thirty-five such call sites were replaced by the formatters in `src/lib/format/currency.ts`, which is now the single place an amount becomes text. That collapses a currency change from a repo-wide sweep to a one-line change, and it is what made the dollar signs surviving in the UI while the backend stored PKR possible to find in the first place. `toFixed` remains correct for non-money values — a tax *rate* of 17.0%, for instance.
 
 ### Immutability (BR-03)
 

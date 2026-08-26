@@ -40,7 +40,10 @@ export interface SupplierResponse {
   updatedAt: string;
 }
 
-/** One row of a supplier's purchase-order history. Money is cents. */
+/**
+ * One row of a supplier's purchase-order history. Money is minor units — paisa
+ * under the default PKR (`common/validation/money.ts`, DEBT-023).
+ */
 export interface SupplierPurchaseOrderSummary {
   id: string;
   poNumber: string;

@@ -1,0 +1,20 @@
+-- Backfill for the default change in 20260824042604_pkr_default_currency.
+--
+-- That migration only altered the column default, which applies to rows inserted
+-- afterwards. Rows already created under the old default still read 'USD' — the
+-- seeded dev tenant among them — and a tenant that reports USD while its money
+-- columns are being formatted as PKR is precisely the mismatch the currency
+-- change was meant to remove.
+--
+-- This is a data decision, not a mechanical one, and it is only safe because it
+-- runs pre-launch: no tenant has deliberately chosen USD, and every monetary row
+-- in this database is development fixture data. Nothing is converted here — the
+-- stored integers keep their digits and change meaning from cents to paisa. On a
+-- deployed system that would silently reinterpret financial history, so this must
+-- not be repeated once real tenants exist; a currency change then needs a
+-- conversion pass over every money column, not an UPDATE of one label.
+--
+-- Scoped to 'USD' rather than unconditional so a tenant that has already been set
+-- to something else is left alone. No-op on a fresh database, where the table is
+-- empty when migrations run.
+UPDATE "TenantSettings" SET "currencyCode" = 'PKR' WHERE "currencyCode" = 'USD';

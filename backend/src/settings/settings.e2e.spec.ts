@@ -242,7 +242,7 @@ describe('Settings and Branches (e2e)', () => {
       expect(body.defaultTaxRateBps).toBe(875);
 
       // Partial: currencyCode was not sent, so it must be untouched.
-      expect(body.currencyCode).toBe(originalSettings?.currencyCode ?? 'USD');
+      expect(body.currencyCode).toBe(originalSettings?.currencyCode ?? 'PKR');
     });
 
     it('refuses a Manager (settings.write is Owner-only)', async () => {
@@ -267,9 +267,22 @@ describe('Settings and Branches (e2e)', () => {
     });
 
     it('rejects a currency code that is not ISO 4217', async () => {
+      // A currency *name* rather than its code. This is the realistic mistake now
+      // that the frontend has a currency field at all, and it must not be stored:
+      // every money column is minor units of this value.
       await patch('/api/v1/settings')
         .set(authed(ownerToken))
-        .send({ currencyCode: 'Dollars' })
+        .send({ currencyCode: 'Rupees' })
+        .expect(422);
+    });
+
+    it('rejects a currency symbol', async () => {
+      // The schema says "never store the display symbol", and CompanyProfileForm
+      // used to hold exactly that. Rs is two letters, not three, so the shape
+      // check catches it.
+      await patch('/api/v1/settings')
+        .set(authed(ownerToken))
+        .send({ currencyCode: 'Rs' })
         .expect(422);
     });
 

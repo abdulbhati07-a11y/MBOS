@@ -4,6 +4,7 @@ import * as React from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { productSchema, ProductValues } from "@/lib/validation/inventory"
+import { CURRENCY_SYMBOL } from "@/lib/format/currency"
 
 import {
   Sheet,
@@ -140,7 +141,7 @@ export function ProductDrawer({ open, onOpenChange, product, onSave }: ProductDr
                 name="price"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Price</FormLabel>
+                    <FormLabel>Price ({CURRENCY_SYMBOL})</FormLabel>
                     <FormControl>
                       <Input type="number" step="0.01" {...field} />
                     </FormControl>
@@ -153,7 +154,7 @@ export function ProductDrawer({ open, onOpenChange, product, onSave }: ProductDr
                 name="cost"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Cost</FormLabel>
+                    <FormLabel>Cost ({CURRENCY_SYMBOL})</FormLabel>
                     <FormControl>
                       <Input type="number" step="0.01" {...field} />
                     </FormControl>

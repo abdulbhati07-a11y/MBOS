@@ -203,7 +203,9 @@ describe('Billing (e2e)', () => {
         .expect(200);
 
       expect(bodyOf<SubscriptionSummary>(res)).toEqual({
-        plan: { name: 'Growth', priceMonthly: 4900 },
+        // Paisa — Rs 12,999. Sourced from SEED_PLANS, so a change there has to
+        // be re-seeded before this passes (`npm run db:seed`).
+        plan: { name: 'Growth', priceMonthly: 1_299_900 },
         status: 'Active',
         currentPeriodStart: expect.any(String),
         currentPeriodEnd: expect.any(String),
@@ -222,7 +224,8 @@ describe('Billing (e2e)', () => {
       expect(names).toEqual(expect.arrayContaining(['Starter', 'Growth']));
 
       const starter = data.find((plan) => plan.name === 'Starter');
-      expect(starter?.priceMonthly).toBe(1900);
+      // Rs 4,999/month in paisa, from SEED_PLANS.
+      expect(starter?.priceMonthly).toBe(499_900);
       expect(starter?.modules).toEqual(
         expect.arrayContaining(['dashboard', 'sales']),
       );

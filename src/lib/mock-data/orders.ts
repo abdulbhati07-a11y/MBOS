@@ -1,6 +1,14 @@
 // ---------------------------------------------------------------------------
 // Mock Orders — Single source of truth for the Sales / POS module.
-// All currency values are stored as numbers; display via .toFixed(2).
+// All currency values are **rupees** (major units); display via formatMoney from
+// src/lib/format/currency.ts, never a bare .toFixed(2).
+//
+// Tax rates are Pakistani GST: 17% standard, with one order at a reduced 10%
+// (Eighth Schedule) so the tax line is exercised at more than one rate, and
+// zero-rated orders for the rest. Every subtotal/tax/total below is arithmetic
+// on its own lines — one seed order previously had a subtotal that disagreed
+// with its single line by a rupee, which is exactly the sort of thing a POS
+// demo should not teach.
 //
 // customerId: matches CustomerRecord.id from MOCK_CUSTOMERS for seed orders.
 // Orders created via the POS (NewOrderForm) have customerId: null until the
@@ -46,12 +54,12 @@ export const MOCK_ORDERS: OrderRecord[] = [
     paymentMethod: "Cash",
     status: "Completed",
     taxRate: 0,
-    subtotal: 119.98,
+    subtotal: 7800,
     taxAmount: 0,
-    total: 119.98,
+    total: 7800,
     lines: [
-      { productId: "1", productName: "Wireless Mouse", unitPrice: 29.99, quantity: 2, lineTotal: 59.98 },
-      { productId: "6", productName: "Webcam HD 1080p", unitPrice: 59.99, quantity: 1, lineTotal: 59.99 },
+      { productId: "1", productName: "Wireless Mouse", unitPrice: 1500, quantity: 2, lineTotal: 3000 },
+      { productId: "6", productName: "Webcam HD 1080p", unitPrice: 4800, quantity: 1, lineTotal: 4800 },
     ],
   },
   {
@@ -62,12 +70,13 @@ export const MOCK_ORDERS: OrderRecord[] = [
     customerId: "cust-001",
     paymentMethod: "Card",
     status: "Completed",
-    taxRate: 8,
-    subtotal: 249.99,
-    taxAmount: 20.00,
-    total: 269.99,
+    // Standard GST.
+    taxRate: 17,
+    subtotal: 32000,
+    taxAmount: 5440,
+    total: 37440,
     lines: [
-      { productId: "4", productName: "Ergonomic Chair", unitPrice: 249.99, quantity: 1, lineTotal: 249.99 },
+      { productId: "4", productName: "Ergonomic Chair", unitPrice: 32000, quantity: 1, lineTotal: 32000 },
     ],
   },
   {
@@ -79,11 +88,11 @@ export const MOCK_ORDERS: OrderRecord[] = [
     paymentMethod: "Mobile",
     status: "Refunded",
     taxRate: 0,
-    subtotal: 89.99,
+    subtotal: 8500,
     taxAmount: 0,
-    total: 89.99,
+    total: 8500,
     lines: [
-      { productId: "2", productName: "Mechanical Keyboard", unitPrice: 89.99, quantity: 1, lineTotal: 89.99 },
+      { productId: "2", productName: "Mechanical Keyboard", unitPrice: 8500, quantity: 1, lineTotal: 8500 },
     ],
   },
   {
@@ -94,14 +103,15 @@ export const MOCK_ORDERS: OrderRecord[] = [
     customerId: "cust-002",
     paymentMethod: "Cash",
     status: "Pending",
-    taxRate: 5,
-    subtotal: 84.97,
-    taxAmount: 4.25,
-    total: 89.22,
+    // Reduced rate, so the tax line is exercised at two different values.
+    taxRate: 10,
+    subtotal: 6500,
+    taxAmount: 650,
+    total: 7150,
     lines: [
-      { productId: "7", productName: "Desk Lamp LED", unitPrice: 34.99, quantity: 1, lineTotal: 34.99 },
-      { productId: "8", productName: "Notebook A5 (Pack of 3)", unitPrice: 9.99, quantity: 2, lineTotal: 19.98 },
-      { productId: "5", productName: "Monitor Stand", unitPrice: 39.99, quantity: 1, lineTotal: 39.99 },
+      { productId: "7", productName: "Desk Lamp LED", unitPrice: 2400, quantity: 1, lineTotal: 2400 },
+      { productId: "8", productName: "Notebook A5 (Pack of 3)", unitPrice: 450, quantity: 2, lineTotal: 900 },
+      { productId: "5", productName: "Monitor Stand", unitPrice: 3200, quantity: 1, lineTotal: 3200 },
     ],
   },
   {
@@ -113,11 +123,11 @@ export const MOCK_ORDERS: OrderRecord[] = [
     paymentMethod: "Card",
     status: "Completed",
     taxRate: 0,
-    subtotal: 44.98,
+    subtotal: 1950,
     taxAmount: 0,
-    total: 44.98,
+    total: 1950,
     lines: [
-      { productId: "3", productName: "USB-C Cable (2m)", unitPrice: 14.99, quantity: 3, lineTotal: 44.97 },
+      { productId: "3", productName: "USB-C Cable (2m)", unitPrice: 650, quantity: 3, lineTotal: 1950 },
     ],
   },
 ]

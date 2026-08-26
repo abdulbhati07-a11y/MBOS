@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button"
 import { useDashboardMetrics, RecentOrderRow } from "@/hooks/use-dashboard-metrics"
 import { OrderStatus } from "@/lib/mock-data/orders"
 import { POStatus } from "@/lib/mock-data/purchase-orders"
+import { formatMoney } from "@/lib/format/currency"
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -84,7 +85,7 @@ const recentOrderColumns: ColumnDef<RecentOrderRow>[] = [
     accessorKey: "total",
     header: "Total",
     cell: ({ row }) => (
-      <span className="font-medium">${row.original.total.toFixed(2)}</span>
+      <span className="font-medium">{formatMoney(row.original.total)}</span>
     ),
   },
   {
@@ -192,7 +193,7 @@ export default function DashboardPage() {
             <ShoppingCart className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">${totalOrderValue.toFixed(2)}</div>
+            <div className="text-2xl font-bold">{formatMoney(totalOrderValue)}</div>
             <p className="text-xs text-muted-foreground mt-1">
               {totalOrderCount} order{totalOrderCount !== 1 ? "s" : ""}
             </p>

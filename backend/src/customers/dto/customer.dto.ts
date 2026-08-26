@@ -40,7 +40,8 @@ export interface CustomerResponse {
  *
  * `totalCents` keeps its unit in its name — this is the wire format, and Section
  * 6.6's whole hazard is a float sneaking into a money field (see
- * `common/validation/money.ts`).
+ * `common/validation/money.ts`). The unit is minor units of the tenant currency,
+ * paisa under the default PKR; the `Cents` spelling is Section 5.10's, DEBT-023.
  */
 export interface CustomerOrderSummary {
   id: string;

@@ -8,24 +8,31 @@
 // Default tax rate field is informational only in this pass.
 // TODO: DEBT-008 — wire defaultTaxRate into NewOrderForm's tax rate input
 // once a settings context or API exists.
+//
+// The currency field is an ISO 4217 *code*, not a display symbol — that is what
+// TenantSettings.currencyCode stores (default PKR), and the display symbol is
+// derived from it in src/lib/format/currency.ts rather than typed by a user.
+// See DEBT-024: changing the code does not convert stored amounts, so once a
+// tenant has orders this field needs a guard rather than a free-text input.
 // ---------------------------------------------------------------------------
 
 import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { CURRENCY_CODE } from "@/lib/format/currency"
 
 type CompanyProfileValues = {
   companyName: string
   defaultTaxRate: string
-  currencySymbol: string
+  currencyCode: string
   timezone: string
 }
 
 const DEFAULTS: CompanyProfileValues = {
   companyName: "Acme Corp",
   defaultTaxRate: "0",
-  currencySymbol: "$",
+  currencyCode: CURRENCY_CODE,
   timezone: "UTC",
 }
 
@@ -79,13 +86,13 @@ export function CompanyProfileForm() {
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="currencySymbol">Currency Symbol</Label>
+          <Label htmlFor="currencyCode">Currency Code</Label>
           <Input
-            id="currencySymbol"
-            value={values.currencySymbol}
-            onChange={handleChange("currencySymbol")}
-            placeholder="e.g. $"
-            maxLength={4}
+            id="currencyCode"
+            value={values.currencyCode}
+            onChange={handleChange("currencyCode")}
+            placeholder="e.g. PKR"
+            maxLength={3}
           />
         </div>
       </div>
@@ -96,7 +103,7 @@ export function CompanyProfileForm() {
           id="timezone"
           value={values.timezone}
           onChange={handleChange("timezone")}
-          placeholder="e.g. UTC, America/New_York"
+          placeholder="e.g. UTC, Asia/Karachi"
         />
       </div>
 

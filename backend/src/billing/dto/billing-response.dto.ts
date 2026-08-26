@@ -3,9 +3,10 @@
  * return type is the contract, and a field cannot be added or dropped by
  * accident.
  *
- * Every monetary value is an integer in cents (DEBT-012, NFR-14). Dates leave
- * as ISO 8601 strings rather than Date objects so serialisation is explicit
- * rather than left to JSON.stringify.
+ * Every monetary value is an integer count of minor units — paisa, for the
+ * default PKR (DEBT-012, NFR-14; the `Cents` suffixes are Section 5.10's naming,
+ * DEBT-023). Dates leave as ISO 8601 strings rather than Date objects so
+ * serialisation is explicit rather than left to JSON.stringify.
  */
 
 /** One row of GET /billing/modules. */
@@ -23,7 +24,7 @@ export interface ModuleStatus {
 export interface SubscriptionSummary {
   plan: {
     name: string;
-    /** Cents per month. */
+    /** Paisa per month — 499900 is Rs 4,999. */
     priceMonthly: number;
   };
   status: string;
@@ -35,7 +36,7 @@ export interface SubscriptionSummary {
 export interface PlanSummary {
   id: string;
   name: string;
-  /** Cents per month. */
+  /** Paisa per month — 499900 is Rs 4,999. */
   priceMonthly: number;
   /**
    * Informational only. Section 6.10: "it is not the live access-control list" —

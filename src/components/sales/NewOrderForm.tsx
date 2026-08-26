@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { newOrderSchema, NewOrderValues } from "@/lib/validation/sales"
 import { useProducts } from "@/contexts/products-context"
 import { OrderRecord, OrderLineRecord, PaymentMethod } from "@/lib/mock-data/orders"
+import { formatMoney } from "@/lib/format/currency"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -63,7 +64,11 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
 
   // ---------------------------------------------------------------------------
   // Derived totals — [PROV-FR-SALE-04]
-  // All display values rendered via .toFixed(2) to avoid floating-point artifacts
+  // These are rupees (major units) — what the cashier types and reads. Float
+  // arithmetic is acceptable here because nothing is persisted from it: the
+  // conversion to integer paisa happens once at the API boundary, via
+  // parseMoneyToMinor. Every value below is rendered through formatMoney, which
+  // fixes two decimals, so a 17% GST line on an odd subtotal displays exactly.
   // ---------------------------------------------------------------------------
   const subtotal = watchedLines.reduce((sum, line) => sum + (line.unitPrice * line.quantity || 0), 0)
   const taxAmount = subtotal * ((watchedTaxRate || 0) / 100)
@@ -161,7 +166,7 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
               <SelectContent>
                 {products.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} — ${p.price.toFixed(2)}
+                    {p.name} — {formatMoney(p.price)}
                     {p.stock === 0 && " (Out of stock)"}
                   </SelectItem>
                 ))}
@@ -222,7 +227,7 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
                         </div>
                       </TableCell>
                       <TableCell className="text-right text-sm">
-                        ${field.unitPrice.toFixed(2)}
+                        {formatMoney(field.unitPrice)}
                       </TableCell>
                       <TableCell className="text-right">
                         <Input
@@ -234,7 +239,7 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
                         />
                       </TableCell>
                       <TableCell className="text-right text-sm font-medium">
-                        ${((line?.unitPrice ?? 0) * (line?.quantity ?? 1)).toFixed(2)}
+                        {formatMoney((line?.unitPrice ?? 0) * (line?.quantity ?? 1))}
                       </TableCell>
                       <TableCell>
                         <Button
@@ -344,15 +349,16 @@ export function NewOrderForm({ onOrderPlaced }: NewOrderFormProps) {
             <h3 className="font-medium mb-3">Order Summary</h3>
             <div className="flex justify-between text-muted-foreground">
               <span>Subtotal</span>
-              <span>${subtotal.toFixed(2)}</span>
+              <span>{formatMoney(subtotal)}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
+              {/* taxRate is a percentage, not money — .toFixed(1) is correct here */}
               <span>Tax ({(watchedTaxRate || 0).toFixed(1)}%)</span>
-              <span>${taxAmount.toFixed(2)}</span>
+              <span>{formatMoney(taxAmount)}</span>
             </div>
             <div className="flex justify-between font-semibold text-base border-t pt-2 mt-2">
               <span>Grand Total</span>
-              <span>${grandTotal.toFixed(2)}</span>
+              <span>{formatMoney(grandTotal)}</span>
             </div>
           </div>
         </div>

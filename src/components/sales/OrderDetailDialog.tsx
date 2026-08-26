@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { OrderRecord } from "@/lib/mock-data/orders"
+import { formatMoney } from "@/lib/format/currency"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import {
   Dialog,
@@ -72,9 +73,9 @@ export function OrderDetailDialog({ open, onOpenChange, order }: OrderDetailDial
               {order.lines.map((line, idx) => (
                 <TableRow key={`${line.productId}-${idx}`}>
                   <TableCell className="font-medium">{line.productName}</TableCell>
-                  <TableCell className="text-right">${line.unitPrice.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(line.unitPrice)}</TableCell>
                   <TableCell className="text-right">{line.quantity}</TableCell>
-                  <TableCell className="text-right">${line.lineTotal.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(line.lineTotal)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -85,15 +86,15 @@ export function OrderDetailDialog({ open, onOpenChange, order }: OrderDetailDial
         <div className="rounded-md bg-muted p-3 text-sm space-y-1.5">
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
-            <span>${order.subtotal.toFixed(2)}</span>
+            <span>{formatMoney(order.subtotal)}</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Tax ({order.taxRate}%)</span>
-            <span>${order.taxAmount.toFixed(2)}</span>
+            <span>{formatMoney(order.taxAmount)}</span>
           </div>
           <div className="flex justify-between font-semibold border-t pt-1.5 mt-1.5">
             <span>Grand Total</span>
-            <span>${order.total.toFixed(2)}</span>
+            <span>{formatMoney(order.total)}</span>
           </div>
         </div>
 

@@ -34,6 +34,7 @@ import {
 import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
 import { ProductRecord } from "@/lib/mock-data/products"
 import { useOrders } from "@/contexts/orders-context"
+import { formatMoney } from "@/lib/format/currency"
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -104,7 +105,7 @@ function SalesSummaryTab() {
     {
       accessorKey: "total",
       header: "Total",
-      cell: ({ row }) => `$${row.original.total.toFixed(2)}`,
+      cell: ({ row }) => formatMoney(row.original.total),
     },
     {
       accessorKey: "status",
@@ -155,7 +156,7 @@ function SalesSummaryTab() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Revenue</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">${totalRevenue.toFixed(2)}</div>
+            <div className="text-2xl font-bold">{formatMoney(totalRevenue)}</div>
             <p className="text-xs text-muted-foreground mt-1">{orderCount} order{orderCount !== 1 ? "s" : ""}</p>
           </CardContent>
         </Card>
@@ -164,8 +165,8 @@ function SalesSummaryTab() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Net Sales</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">${totalSubtotal.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground mt-1">Tax collected: ${totalTax.toFixed(2)}</p>
+            <div className="text-2xl font-bold">{formatMoney(totalSubtotal)}</div>
+            <p className="text-xs text-muted-foreground mt-1">Tax collected: {formatMoney(totalTax)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -186,7 +187,7 @@ function SalesSummaryTab() {
               {byPayment.filter((p) => p.count > 0).map((p) => (
                 <div key={p.method} className="flex justify-between text-xs">
                   <span className="text-muted-foreground">{p.method}</span>
-                  <span className="font-medium">{p.count} · ${p.total.toFixed(2)}</span>
+                  <span className="font-medium">{p.count} · {formatMoney(p.total)}</span>
                 </div>
               ))}
               {byPayment.every((p) => p.count === 0) && (
@@ -270,12 +271,12 @@ function InventoryValuationTab() {
     {
       id: "retailValue",
       header: "Retail Value",
-      cell: ({ row }) => `$${row.original.retailValue.toFixed(2)}`,
+      cell: ({ row }) => formatMoney(row.original.retailValue),
     },
     {
       id: "costValue",
       header: "Cost Value",
-      cell: ({ row }) => `$${row.original.costValue.toFixed(2)}`,
+      cell: ({ row }) => formatMoney(row.original.costValue),
     },
     {
       id: "margin",
@@ -284,7 +285,7 @@ function InventoryValuationTab() {
         const m = row.original.margin
         return (
           <span className={m >= 0 ? "text-success font-medium" : "text-destructive font-medium"}>
-            ${m.toFixed(2)}
+            {formatMoney(m)}
           </span>
         )
       },
@@ -329,7 +330,7 @@ function InventoryValuationTab() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Retail Value</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">${totalRetailValue.toFixed(2)}</div>
+            <div className="text-2xl font-bold">{formatMoney(totalRetailValue)}</div>
             <p className="text-xs text-muted-foreground mt-1">At selling price</p>
           </CardContent>
         </Card>
@@ -338,7 +339,7 @@ function InventoryValuationTab() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Cost Value</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">${totalCostValue.toFixed(2)}</div>
+            <div className="text-2xl font-bold">{formatMoney(totalCostValue)}</div>
             <p className="text-xs text-muted-foreground mt-1">At purchase cost</p>
           </CardContent>
         </Card>
@@ -347,7 +348,7 @@ function InventoryValuationTab() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Gross Margin</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-success">${grossMargin.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-success">{formatMoney(grossMargin)}</div>
             <p className="text-xs text-muted-foreground mt-1">Retail minus cost</p>
           </CardContent>
         </Card>
@@ -433,7 +434,7 @@ function ActivityTab() {
     {
       accessorKey: "totalSpend",
       header: "Total Spend",
-      cell: ({ row }) => <span className="font-medium">${row.original.totalSpend.toFixed(2)}</span>,
+      cell: ({ row }) => <span className="font-medium">{formatMoney(row.original.totalSpend)}</span>,
     },
   ]
 
@@ -483,12 +484,12 @@ function ActivityTab() {
     {
       accessorKey: "totalSpend",
       header: "Total PO Value",
-      cell: ({ row }) => `$${row.original.totalSpend.toFixed(2)}`,
+      cell: ({ row }) => formatMoney(row.original.totalSpend),
     },
     {
       accessorKey: "receivedSpend",
       header: "Received Value",
-      cell: ({ row }) => <span className="font-medium">${row.original.receivedSpend.toFixed(2)}</span>,
+      cell: ({ row }) => <span className="font-medium">{formatMoney(row.original.receivedSpend)}</span>,
     },
   ]
 

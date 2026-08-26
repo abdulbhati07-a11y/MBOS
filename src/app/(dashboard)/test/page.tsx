@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog"
 import { Button } from "@/components/ui/button"
 import { Trash2, PackagePlus } from "lucide-react"
 import { type ColumnDef } from "@tanstack/react-table"
+import { formatMoney } from "@/lib/format/currency"
 
 // Mock Data Type
 type MockItem = {
@@ -18,12 +19,12 @@ type MockItem = {
   price: number
 }
 
-// Mock Data
+// Mock Data — prices are rupees (major units), like every other price in the app.
 const mockData: MockItem[] = [
-  { id: "1", name: "Wireless Keyboard", sku: "KB-001", status: "active", price: 45.99 },
-  { id: "2", name: "Gaming Mouse", sku: "MS-002", status: "low_stock", price: 29.99 },
-  { id: "3", name: "27in Monitor", sku: "MN-003", status: "out_of_stock", price: 199.99 },
-  { id: "4", name: "USB-C Hub", sku: "HB-004", status: "active", price: 34.50 },
+  { id: "1", name: "Wireless Keyboard", sku: "KB-001", status: "active", price: 4599 },
+  { id: "2", name: "Gaming Mouse", sku: "MS-002", status: "low_stock", price: 2999 },
+  { id: "3", name: "27in Monitor", sku: "MN-003", status: "out_of_stock", price: 19999 },
+  { id: "4", name: "USB-C Hub", sku: "HB-004", status: "active", price: 3450 },
 ]
 
 // Status Variant Map for StatusBadge
@@ -66,11 +67,7 @@ export default function TestPage() {
       header: "Price",
       cell: ({ row }) => {
         const amount = parseFloat(row.getValue("price"))
-        const formatted = new Intl.NumberFormat("en-US", {
-          style: "currency",
-          currency: "USD",
-        }).format(amount)
-        return <div className="font-medium">{formatted}</div>
+        return <div className="font-medium">{formatMoney(amount)}</div>
       },
     },
     {

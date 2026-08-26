@@ -11,7 +11,7 @@
 
 Every table in this section follows these constraints without exception.
 
-**Monetary values** are stored as `INTEGER` (smallest currency unit — cents for USD). No `FLOAT`, `REAL`, or `DECIMAL` columns for money. Display formatting (`(value / 100).toFixed(2)`) is a Presentation-layer concern. See Section 4.6 and DEBT-012.
+**Monetary values** are stored as `INTEGER` (smallest currency unit — paisa for the default `PKR`, cents for `USD`, pence for `GBP`). No `FLOAT`, `REAL`, or `DECIMAL` columns for money. Display formatting is a Presentation-layer concern and goes through `src/lib/format/currency.ts` — not an inline `(value / 100).toFixed(2)`, which reintroduces float arithmetic on exact amounts one call site at a time. See Section 4.6 and DEBT-012.
 
 **Primary keys** are UUIDs (`UUID` type in PostgreSQL). No serial/auto-increment integers for any entity that will cross a tenant boundary or appear in a URL.
 
@@ -54,14 +54,16 @@ Tenant
 
 Tenant-specific configuration. `defaultTaxRateBps` is the value `NewOrderForm` pre-fills at session start; `Order.taxRateBps` is the snapshot of what was actually applied to a specific order and is never changed by updating TenantSettings.
 
-`currencyCode` uses ISO 4217 (e.g. `USD`, `GBP`, `PKR`) rather than a currency symbol. The display symbol is derivable via `Intl.NumberFormat` and must not be stored directly — doing so would couple multi-currency formatting to a free-text field.
+`currencyCode` uses ISO 4217 (e.g. `PKR`, `USD`, `GBP`) rather than a currency symbol. The display symbol must not be stored directly — doing so would couple multi-currency formatting to a free-text field. It defaults to `PKR`, the product's market; PKR's minor unit is the paisa (1/100 rupee), which is what every `*Cents` column then holds. Note that `Intl.NumberFormat` with `style: "currency"` renders PKR as "Rs", "₨" or "PKR" depending on the ICU build, so the frontend derives the symbol from a constant rather than from ICU — see `src/lib/format/currency.ts`.
+
+Changing `currencyCode` on a tenant that already has financial rows reinterprets them rather than converting them, and BR-03 forbids editing the affected records afterwards. There is no conversion endpoint in Section 6. See DEBT-024.
 
 ```
 TenantSettings
   tenantId          UUID PK FK → Tenant.id ON DELETE CASCADE
   companyName       TEXT NOT NULL DEFAULT ''
   defaultTaxRateBps INTEGER NOT NULL DEFAULT 0
-  currencyCode      CHAR(3) NOT NULL DEFAULT 'USD'
+  currencyCode      CHAR(3) NOT NULL DEFAULT 'PKR'
   timezone          TEXT NOT NULL DEFAULT 'UTC'
   updatedAt         TIMESTAMPTZ NOT NULL
 ```
@@ -180,8 +182,8 @@ Plan
   id              UUID PK DEFAULT gen_random_uuid()
   name            TEXT NOT NULL UNIQUE
   description     TEXT NOT NULL DEFAULT ''
-  priceMonthly    INTEGER NOT NULL   -- cents
-  priceAnnual     INTEGER NOT NULL   -- cents
+  priceMonthly    INTEGER NOT NULL   -- minor units (paisa for PKR)
+  priceAnnual     INTEGER NOT NULL   -- minor units (paisa for PKR)
   isActive        BOOLEAN NOT NULL DEFAULT true
   createdAt       TIMESTAMPTZ NOT NULL DEFAULT now()
   updatedAt       TIMESTAMPTZ NOT NULL

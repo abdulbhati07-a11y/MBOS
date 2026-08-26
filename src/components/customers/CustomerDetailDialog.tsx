@@ -4,6 +4,7 @@ import * as React from "react"
 import { CustomerRecord } from "@/lib/mock-data/customers"
 import { OrderStatus } from "@/lib/mock-data/orders"
 import { useOrders } from "@/contexts/orders-context"
+import { formatMoney } from "@/lib/format/currency"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 import { EmptyState } from "@/components/shared/EmptyState"
 import {
@@ -95,8 +96,8 @@ export function CustomerDetailDialog({
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground w-20 shrink-0">Orders</span>
             <span>
-              {totalOrders} order{totalOrders !== 1 ? "s" : ""} · $
-              {totalSpend.toFixed(2)} total spend
+              {totalOrders} order{totalOrders !== 1 ? "s" : ""} ·{" "}
+              {formatMoney(totalSpend)} total spend
             </span>
           </div>
         </div>
@@ -134,7 +135,7 @@ export function CustomerDetailDialog({
                         })}
                       </TableCell>
                       <TableCell className="text-right">
-                        ${order.total.toFixed(2)}
+                        {formatMoney(order.total)}
                       </TableCell>
                       <TableCell>
                         <StatusBadge

@@ -13,7 +13,7 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 const SETTINGS_DEFAULTS: TenantSettingsResponse = {
   companyName: '',
   defaultTaxRateBps: 0,
-  currencyCode: 'USD',
+  currencyCode: 'PKR',
   timezone: 'UTC',
 };
 

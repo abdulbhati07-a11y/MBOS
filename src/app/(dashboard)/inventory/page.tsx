@@ -23,6 +23,7 @@ import { ProductValues } from "@/lib/validation/inventory"
 import { StockAdjustmentValues } from "@/lib/validation/inventory"
 import { useCanPerform } from "@/contexts/role-context"
 import { Modules, Actions } from "@/config/permissions"
+import { formatMoney } from "@/lib/format/currency"
 import { useProducts, useSetProducts } from "@/contexts/products-context"
 import { type ProductRecord } from "@/lib/mock-data/products"
 
@@ -157,7 +158,7 @@ export default function InventoryPage() {
       {
         accessorKey: "price",
         header: "Price",
-        cell: ({ row }) => `$${row.original.price.toFixed(2)}`,
+        cell: ({ row }) => formatMoney(row.original.price),
       },
       {
         accessorKey: "stock",

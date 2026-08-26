@@ -17,6 +17,7 @@ import { OrderDetailDialog } from "@/components/sales/OrderDetailDialog"
 import { NewOrderForm } from "@/components/sales/NewOrderForm"
 import { OrderRecord, OrderStatus } from "@/lib/mock-data/orders"
 import { useOrders, useSetOrders } from "@/contexts/orders-context"
+import { formatMoney } from "@/lib/format/currency"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -107,7 +108,7 @@ export default function SalesPage() {
           accessorKey: "total",
           header: "Total",
           cell: ({ row }) => (
-            <span className="font-medium">${row.original.total.toFixed(2)}</span>
+            <span className="font-medium">{formatMoney(row.original.total)}</span>
           ),
         },
         {

@@ -7,6 +7,7 @@ import { newPOSchema, NewPOValues } from "@/lib/validation/purchases"
 import { MOCK_PRODUCTS } from "@/lib/mock-data/products"
 import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
 import { PurchaseOrderRecord, POLineRecord } from "@/lib/mock-data/purchase-orders"
+import { formatMoney, CURRENCY_SYMBOL } from "@/lib/format/currency"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -59,7 +60,10 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
 
   const watchedLines = form.watch("lines")
 
-  // Derived grand total — all display values via .toFixed(2)
+  // Derived grand total. The form's money fields are rupees (major units) —
+  // what the buyer types — so this sum is float arithmetic on rupees, fine for
+  // a display total. The conversion to integer paisa happens once, at the API
+  // boundary, via parseMoneyToMinor. All display goes through formatMoney.
   const grandTotal = watchedLines.reduce(
     (sum, line) => sum + (line.unitCost * line.quantity || 0),
     0
@@ -196,7 +200,7 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
               <SelectContent>
                 {MOCK_PRODUCTS.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} — cost ${p.cost.toFixed(2)}
+                    {p.name} — cost {formatMoney(p.cost)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -224,7 +228,9 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Product</TableHead>
-                  <TableHead className="text-right w-32">Unit Cost ($)</TableHead>
+                  <TableHead className="text-right w-32">
+                    Unit Cost ({CURRENCY_SYMBOL})
+                  </TableHead>
                   <TableHead className="text-right w-28">Qty</TableHead>
                   <TableHead className="text-right">Line Total</TableHead>
                   <TableHead className="w-10" />
@@ -258,7 +264,7 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
                         />
                       </TableCell>
                       <TableCell className="text-right text-sm font-medium">
-                        ${((line?.unitCost ?? 0) * (line?.quantity ?? 1)).toFixed(2)}
+                        {formatMoney((line?.unitCost ?? 0) * (line?.quantity ?? 1))}
                       </TableCell>
                       <TableCell>
                         <Button
@@ -315,7 +321,7 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
             <h3 className="font-medium mb-3">Order Summary</h3>
             <div className="flex justify-between font-semibold text-base">
               <span>Grand Total</span>
-              <span>${grandTotal.toFixed(2)}</span>
+              <span>{formatMoney(grandTotal)}</span>
             </div>
           </div>
         </div>
