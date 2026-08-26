@@ -6,7 +6,9 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
 import { CustomersModule } from './customers/customers.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { MailModule } from './mail/mail.module';
+import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProductsModule } from './products/products.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
@@ -50,13 +52,23 @@ import { UsersModule } from './users/users.module';
     // Section 6.5 — user management. Imports AuthModule for PasswordService, so
     // a created user's password is hashed by the same code login verifies with.
     UsersModule,
-    // Section 6.6 — the core business entities. Nothing depends on them yet;
-    // Sections 6.7-6.9 build orders, adjustments and POs on top, which is why
-    // Product.stock is read-only here and only the audited adjustment endpoint
-    // writes it.
+    // Section 6.6 — the core business entities. Sections 6.7-6.9 build orders,
+    // adjustments and POs on top, which is why Product.stock is read-only here
+    // and only audited writers change it.
     CustomersModule,
     SuppliersModule,
     ProductsModule,
+    // Section 6.7 — orders. The first module that writes money, so it is also
+    // the first that has to compute it: totals are derived server-side from the
+    // lines (BR-05), prices are snapshotted at sale time, and completing an
+    // order decrements stock in the same transaction (BR-02, FR-SALE-04) —
+    // making this the second writer of Product.stock after 6.8's adjustments.
+    OrdersModule,
+    // Section 6.8 — the audited write path for Product.stock. Registered after
+    // OrdersModule because order completion is the other writer, and the two must
+    // agree on the shape of a StockAdjustment row for the audit log to reconcile
+    // (BR-02). Also owns the alerts the Dashboard's Inventory Health widget reads.
+    InventoryModule,
     // Section 6.10 — the write side of the module gating that step 5 enforces
     // on read. Imported after AuthModule so the global guard is registered
     // before these controllers' routes are mapped.

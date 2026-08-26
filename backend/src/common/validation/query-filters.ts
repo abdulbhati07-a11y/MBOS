@@ -1,6 +1,12 @@
 import { applyDecorators } from '@nestjs/common';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 /**
  * Query-string filters shared by the Section 6.4-6.11 list endpoints.
@@ -86,4 +92,49 @@ export function searchAny<W>(
   // The one cast: a `{ OR: [...] }` literal cannot be expressed as a generic `W`
   // without it. Confined here so every call site stays fully typed.
   return { OR: clauses } as W;
+}
+
+/** Matches a date with no time part, e.g. `2026-08-24`. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * `?dateFrom=` / `?dateTo=` — an ISO 8601 date or timestamp.
+ *
+ * `strict` rejects impossible calendar dates that the lenient parse would accept
+ * and silently roll over: `2026-02-30` becomes March 2nd under `new Date()`, so a
+ * report filtered to February would quietly include a March order.
+ */
+export function IsOptionalDateQuery(): PropertyDecorator {
+  return applyDecorators(IsOptional(), IsISO8601({ strict: true }));
+}
+
+/**
+ * Builds the `{ gte, lte }` a date-range filter needs, or `undefined` when
+ * neither bound was given, so callers can spread it unconditionally.
+ *
+ * The subtlety is `dateTo`, and it is the reason this is shared rather than
+ * inlined per endpoint. `?dateTo=2026-08-24` means "through the 24th", but
+ * `new Date('2026-08-24')` is midnight UTC, so a plain `lte` would exclude every
+ * order placed *during* the 24th — a report that silently loses its most recent
+ * day. A date-only upper bound is therefore widened to the end of that day. A
+ * full timestamp is honoured exactly as sent, because a caller who wrote the time
+ * meant it.
+ *
+ * Both bounds are validated as ISO 8601 by `IsOptionalDateQuery` before reaching
+ * here, so the `Date`s cannot be Invalid.
+ */
+export function dateRange(
+  from?: string,
+  to?: string,
+): { gte?: Date; lte?: Date } | undefined {
+  if (from === undefined && to === undefined) return undefined;
+
+  const range: { gte?: Date; lte?: Date } = {};
+  if (from !== undefined) range.gte = new Date(from);
+  if (to !== undefined) {
+    range.lte = DATE_ONLY.test(to)
+      ? new Date(`${to}T23:59:59.999Z`)
+      : new Date(to);
+  }
+  return range;
 }

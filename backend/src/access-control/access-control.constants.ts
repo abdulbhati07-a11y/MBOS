@@ -206,11 +206,22 @@ export const PERMISSION_GRID: readonly {
 /**
  * The plan catalogue, seeded as development scaffolding.
  *
- * Values are taken from the Section 6.10 `GET /plans` example verbatim rather
- * than invented (Starter at 1900 cents, Growth at 4900, with those exact module
- * lists). Plans are global — not tenant data — and Section 6.13 assigns plan
- * CRUD to the super-tenant admin API in Section 10, so there is no endpoint that
- * creates them; seeding is the only way they exist for development.
+ * The module lists and the two-tier shape come from the Section 6.10
+ * `GET /plans` example verbatim. The *prices* no longer do. Section 6.10 quotes
+ * 1900 and 4900 — $19 and $49 — and the product is priced in PKR
+ * (TenantSettings.currencyCode defaults to PKR), so those figures are converted
+ * here at roughly 280 PKR/USD and rounded to the price points a Pakistani SaaS
+ * would actually publish: Starter Rs 4,999/month, Growth Rs 12,999/month. The
+ * annual figures keep the example's discount shape — twelve months for the price
+ * of ten.
+ *
+ * Treat them as FX-derived placeholders, not a pricing decision. What a plan
+ * should cost in this market, and how the two tiers differ, are the open
+ * questions in DEBT-019 and DEBT-020; nothing bills against these yet.
+ *
+ * Plans are global — not tenant data — and Section 6.13 assigns plan CRUD to the
+ * super-tenant admin API in Section 10, so there is no endpoint that creates
+ * them; seeding is the only way they exist for development.
  *
  * `modules` here is informational: it describes what a plan includes at
  * onboarding. It never grants access — TenantModuleSubscription is the sole
@@ -226,16 +237,18 @@ export const SEED_PLANS: readonly {
   {
     name: 'Starter',
     description: 'Core retail operations for a single location.',
-    priceMonthlyCents: 1900,
-    // Ten months for the price of twelve, the usual annual discount shape.
-    priceAnnualCents: 19_000,
+    // Paisa, like every other money value (money.ts): Rs 4,999.
+    priceMonthlyCents: 499_900,
+    // Rs 49,990 — ten months' price for a twelve-month term.
+    priceAnnualCents: 4_999_000,
     modules: ['dashboard', 'inventory', 'sales', 'customers'],
   },
   {
     name: 'Growth',
     description: 'Adds purchasing, reporting and configuration.',
-    priceMonthlyCents: 4900,
-    priceAnnualCents: 49_000,
+    // Rs 12,999 and Rs 129,990.
+    priceMonthlyCents: 1_299_900,
+    priceAnnualCents: 12_999_000,
     modules: [
       'dashboard',
       'inventory',
