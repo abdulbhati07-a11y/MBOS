@@ -13,6 +13,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { ReportsModule } from './reports/reports.module';
 import { RolesModule } from './roles/roles.module';
 import { SettingsModule } from './settings/settings.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
@@ -80,6 +81,11 @@ import { UsersModule } from './users/users.module';
     // on read. Imported after AuthModule so the global guard is registered
     // before these controllers' routes are mapped.
     BillingModule,
+    // Section 6.11 — reports. Registered last because it only reads, and reads
+    // across the tables every module above owns: orders and refunds for sales,
+    // products for valuation, customers and suppliers for activity and spend. It
+    // adds no writer and no new column, so nothing downstream depends on it.
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
