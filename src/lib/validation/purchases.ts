@@ -37,9 +37,12 @@ export type POLineValues = z.infer<typeof poLineSchema>
 
 // ---------------------------------------------------------------------------
 // New PO Schema [PROV-FR-PUR-04]
+//
+// The supplier is bound by **id**, not name: the API takes a `supplierId` FK, and
+// two suppliers can share a name. The Select's option values are supplier ids.
 // ---------------------------------------------------------------------------
 export const newPOSchema = z.object({
-  supplierName: z.string().min(1, { message: "Please select a supplier" }),
+  supplierId: z.string().min(1, { message: "Please select a supplier" }),
   notes: z.string().optional().default(""),
   lines: z
     .array(poLineSchema)
