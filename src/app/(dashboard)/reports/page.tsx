@@ -5,11 +5,9 @@
 //
 // Section 6.11 — reports, wired to the live API.
 //
-// This page used to compute every figure in the browser: it read
-// `OrdersContext` / `ProductsContext` and the `MOCK_*` arrays and summed them
-// client-side. That is gone. Each tab now reads a `/reports` endpoint whose
-// numbers are derived once, on the server, across the whole table — so the
-// figure reconciles against the records behind it and does not shift as a reader
+// Each tab reads a `/reports` endpoint whose numbers are derived once, on the
+// server, across the whole table — so the figure reconciles against the records
+// behind it and does not shift as a reader
 // pages through. See `src/lib/api/reports/queries.ts`.
 //
 // Two consequences of that move show up throughout this file:

@@ -105,3 +105,52 @@ export async function logout(): Promise<void> {
     setAccessToken(null)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Password reset (Section 6.3, DEBT-015)
+//
+// Both endpoints are @Public and strictly rate-limited. The server answers
+// `forgotPassword` identically whether or not the address belongs to an
+// account — a deliberate anti-enumeration property — so the UI must not
+// speculate either: there is no "user not found" branch to render.
+// ---------------------------------------------------------------------------
+
+export interface ForgotPasswordInput {
+  email: string
+}
+
+/**
+ * Requests a password-reset email.
+ *
+ * Always 202 on transport success. Resolve-and-show-the-generic-message is the
+ * whole contract: treating a 4xx here as "that email doesn't exist" would
+ * undo the server-side design.
+ */
+export async function forgotPassword(
+  input: ForgotPasswordInput,
+): Promise<void> {
+  await api.post<void>("/auth/forgot-password", input, {
+    anonymous: true,
+    noRetry: true,
+  })
+}
+
+export interface ResetPasswordInput {
+  token: string
+  password: string
+}
+
+/**
+ * Consumes a reset token and sets the new password.
+ *
+ * 401 means the token is invalid, expired, or already used — the only failure
+ * the reset form can act on. A 422 is the shared password policy validator
+ * rejecting the new password, which the form's zod schema should have caught
+ * first.
+ */
+export async function resetPassword(input: ResetPasswordInput): Promise<void> {
+  await api.post<void>("/auth/reset-password", input, {
+    anonymous: true,
+    noRetry: true,
+  })
+}

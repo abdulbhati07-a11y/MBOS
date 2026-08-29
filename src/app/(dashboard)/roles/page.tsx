@@ -228,9 +228,13 @@ export default function RolesPage() {
   const canDelete = useCanPerform(Modules.SETTINGS, Actions.DELETE)
 
   const [rowError, setRowError] = React.useState<string | null>(null)
-  const [selectedRoleId, setSelectedRoleId] = React.useState<string | null>(null)
+  // The role the user (or a just-created dialog) picked — `null` means "no
+  // explicit pick yet", which derives to the first role below. Deriving the
+  // effective selection during render rather than syncing it in an effect also
+  // recovers for free when the held role is deleted: it drops out of the list
+  // and the first role takes over.
+  const [pickedRoleId, setPickedRoleId] = React.useState<string | null>(null)
   const [createOpen, setCreateOpen] = React.useState(false)
-  const [draft, setDraft] = React.useState<Record<string, boolean>>({})
 
   const rolesQuery = useQuery({
     queryKey: roleKeys.list({ pageSize: ROLE_PAGE_SIZE }),
@@ -239,15 +243,10 @@ export default function RolesPage() {
   })
   const roles = rolesQuery.data?.data ?? []
 
-  // Default the selection to the first role, and recover the selection if the one
-  // held was just deleted. Functional update keeps `selectedRoleId` out of deps.
-  React.useEffect(() => {
-    const list = rolesQuery.data?.data
-    if (!list || list.length === 0) return
-    setSelectedRoleId((prev) =>
-      prev && list.some((r) => r.id === prev) ? prev : list[0].id
-    )
-  }, [rolesQuery.data])
+  const selectedRoleId =
+    pickedRoleId && roles.some((r) => r.id === pickedRoleId)
+      ? pickedRoleId
+      : (roles[0]?.id ?? null)
 
   const permsQuery = useQuery({
     queryKey: selectedRoleId
@@ -257,17 +256,30 @@ export default function RolesPage() {
       fetchRolePermissions(selectedRoleId as string, signal),
     enabled: canView && selectedRoleId !== null,
   })
-  const perms = permsQuery.data ?? []
+  // Memoized identity so downstream memos keyed on `perms` don't recompute on
+  // every render of an unchanged grid.
+  const perms = React.useMemo(() => permsQuery.data ?? [], [permsQuery.data])
 
-  // Seed the editable draft whenever a role's grid arrives — including after a
-  // save invalidates and refetches it, which is what clears the dirty state.
-  React.useEffect(() => {
-    const data = permsQuery.data
-    if (!data) return
-    setDraft(
-      Object.fromEntries(data.map((p) => [permKey(p.module, p.action), p.granted]))
-    )
-  }, [permsQuery.data])
+  // The editable grid = the server's values with local edits overlaid. No
+  // effect is needed to "seed" it: a fresh role starts with an empty `edits`
+  // map, so the server grid wins. When a refetch lands (after a save, or when
+  // switching to a role whose grid was cached), the overlay must fall away —
+  // `dataUpdatedAt` changes on every fetch and the render-time reset below
+  // drops the stale edits before the browser paints.
+  const [edits, setEdits] = React.useState<Record<string, boolean>>({})
+  const [editsBase, setEditsBase] = React.useState(permsQuery.dataUpdatedAt)
+  if (permsQuery.dataUpdatedAt !== editsBase) {
+    // Setting state during render — React's sanctioned way to reset state when
+    // outside data changes — beats an effect here: no frame shows a clobbered
+    // or stale grid, and the eslint set-state-in-effect rule stays quiet.
+    setEdits({})
+    setEditsBase(permsQuery.dataUpdatedAt)
+  }
+  const draft = React.useMemo(() => {
+    const base: Record<string, boolean> = {}
+    for (const p of perms) base[permKey(p.module, p.action)] = p.granted
+    return { ...base, ...edits }
+  }, [perms, edits])
 
   const selectedRole = roles.find((r) => r.id === selectedRoleId)
   const isBuiltIn = selectedRole?.isBuiltIn ?? false
@@ -341,7 +353,9 @@ export default function RolesPage() {
     mutationFn: (id: string) => deleteRole(id),
     onSuccess: (_role, id) => {
       setRowError(null)
-      if (selectedRoleId === id) setSelectedRoleId(null)
+      // Selection is derived, so dropping the pick is enough: the effective
+      // selection falls to the first role in the refreshed list.
+      if (pickedRoleId === id) setPickedRoleId(null)
       void queryClient.invalidateQueries({ queryKey: roleKeys.lists() })
     },
     onError: (err) => {
@@ -365,18 +379,15 @@ export default function RolesPage() {
 
   // ── Handlers ──
   const toggle = (module: string, action: string, granted: boolean) => {
-    setDraft((prev) => ({ ...prev, [permKey(module, action)]: granted }))
+    setEdits((prev) => ({ ...prev, [permKey(module, action)]: granted }))
   }
 
-  const resetDraft = () => {
-    setDraft(
-      Object.fromEntries(perms.map((p) => [permKey(p.module, p.action), p.granted]))
-    )
-  }
+  // Clearing the overlay returns the grid to the server's last answer.
+  const resetDraft = () => setEdits({})
 
   const handleRoleCreated = (role: RoleSummary) => {
     void queryClient.invalidateQueries({ queryKey: roleKeys.lists() })
-    setSelectedRoleId(role.id)
+    setPickedRoleId(role.id)
   }
 
   const gridReady =
@@ -474,7 +485,7 @@ export default function RolesPage() {
                   >
                     <button
                       type="button"
-                      onClick={() => setSelectedRoleId(role.id)}
+                      onClick={() => setPickedRoleId(role.id)}
                       className="flex-1 truncate text-left text-sm font-medium"
                     >
                       {role.name}

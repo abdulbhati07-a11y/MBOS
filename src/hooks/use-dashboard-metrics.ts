@@ -3,10 +3,9 @@
 // ---------------------------------------------------------------------------
 // src/hooks/use-dashboard-metrics.ts
 //
-// The dashboard's data, read from the live API (DEBT-032). This used to derive
-// every figure from the mock-backed `OrdersContext` / `ProductsContext` and the
-// `MOCK_*` arrays; it now fires three gated reads against the real backend and
-// hands the page their loading / error / permission state.
+// The dashboard's data, read from the live API (DEBT-032). Fires three gated
+// reads against the backend and hands the page their loading / error /
+// permission state.
 //
 // The three sections are gated on DIFFERENT permissions, because the dashboard is
 // visible to every role but its data is not: `sales` and `inventory` are readable

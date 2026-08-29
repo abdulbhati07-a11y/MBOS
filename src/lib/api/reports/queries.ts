@@ -4,10 +4,9 @@
 // Read side of Section 6.11 — reports. Five endpoints, all gated on
 // `reports.read`, all derived server-side from the live database.
 //
-// This is the seam that replaces what the Reports page used to compute in the
-// browser from `OrdersContext` / `ProductsContext` and the `MOCK_*` arrays. The
-// move matters beyond "use real data": the numbers are now derived once, on the
-// server, against the whole table rather than the page's slice — so two people
+// Server-side derivation matters beyond "use real data": the numbers are
+// derived once, on the server, against the whole table rather than the page's
+// slice — so two people
 // reading the same report see the same figure, and a report reconciles against
 // the records it summarises (see the backend's `reports.service.ts` for the
 // invariants it upholds — rows sum to totals, gross − refunds = net, walk-in

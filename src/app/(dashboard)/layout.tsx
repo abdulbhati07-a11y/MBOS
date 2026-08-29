@@ -14,10 +14,10 @@
 //                     redirects to /login when there is no session. Placed
 //                     outside AppShell so a logged-out visitor never sees the
 //                     sidebar and header flash before the redirect lands.
-//   Orders/Products   mock-data stores, still backed by useState. These are the
-//                     next things to go as pages move onto the API; they stay
-//                     inside the gate so their eventual API-backed replacements
-//                     already have a session to authenticate with.
+//
+// The former Orders/Products mock-data contexts are gone: every page reads
+// through TanStack Query against the live API, and a page that writes
+// invalidates the affected queries rather than mutating a React store.
 //
 // This layout stays a Server Component. Each provider carries its own
 // "use client" boundary, which is the documented way to use context under the
@@ -28,8 +28,6 @@ import { AppShell } from "@/components/shared/AppShell"
 import { SessionGate } from "@/components/shared/SessionGate"
 import { QueryProvider } from "@/components/providers/QueryProvider"
 import { SessionProvider } from "@/contexts/session-context"
-import { ProductsProvider } from "@/contexts/products-context"
-import { OrdersProvider } from "@/contexts/orders-context"
 
 export default function DashboardLayout({
   children,
@@ -40,11 +38,7 @@ export default function DashboardLayout({
     <QueryProvider>
       <SessionProvider>
         <SessionGate>
-          <OrdersProvider>
-            <ProductsProvider>
-              <AppShell>{children}</AppShell>
-            </ProductsProvider>
-          </OrdersProvider>
+          <AppShell>{children}</AppShell>
         </SessionGate>
       </SessionProvider>
     </QueryProvider>
