@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { validateEnv } from './config/env-validation';
 import { ApiExceptionFilter } from './common/filters/http-exception.filter';
 import { ApiValidationPipe } from './common/pipes/api-validation.pipe';
 
@@ -11,6 +12,11 @@ import { ApiValidationPipe } from './common/pipes/api-validation.pipe';
 const DEFAULT_CORS_ORIGIN = 'http://localhost:3000';
 
 async function bootstrap(): Promise<void> {
+  // Fail before Nest boots on a configuration that cannot serve safely (a
+  // missing secret, an example value, production CORS pointing at localhost).
+  // Everything downstream can assume these invariants hold.
+  validateEnv(process.env);
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
 
@@ -56,6 +62,12 @@ async function bootstrap(): Promise<void> {
 
   // 3001 so the API does not collide with `next dev` on 3000.
   await app.listen(process.env.PORT ?? 3001);
+
+  // SIGTERM/SIGINT close the HTTP server first and then run the module
+  // lifecycle hooks — PrismaService.onModuleDestroy drains its pool. Without
+  // this, a container stop cuts in-flight requests and the deploy tool's
+  // health check kills the old instance before the new one is ready.
+  app.enableShutdownHooks();
 }
 void bootstrap();
 

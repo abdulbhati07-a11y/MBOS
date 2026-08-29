@@ -119,6 +119,26 @@ async function main(): Promise<void> {
         `permissions (${pruned} pruned).`,
     );
 
+    // The dev tenant, its subscription and its known-password owner are
+    // development scaffolding. They must never exist in a production database:
+    // `DevPassw0rd!` is public (it is in this repository), so an unconditional
+    // seed would hand every deployment a live Owner login. NODE_ENV gates it
+    // automatically; SEED_DEV_TENANT=false opts out in shared dev/staging too.
+    // Everything above (roles, permissions) and below (plans) is global
+    // catalogue data and still seeds unconditionally.
+    const seedDevTenant =
+      process.env.NODE_ENV !== 'production' &&
+      process.env.SEED_DEV_TENANT !== 'false';
+
+    if (!seedDevTenant) {
+      console.log(
+        'Skipping dev tenant / dev user seed ' +
+          `(NODE_ENV=${process.env.NODE_ENV ?? 'unset'}` +
+          `${process.env.SEED_DEV_TENANT === 'false' ? ', SEED_DEV_TENANT=false' : ''}).`,
+      );
+      return;
+    }
+
     const tenant = await prisma.tenant.upsert({
       where: { slug: DEV_TENANT_SLUG },
       update: {},

@@ -115,7 +115,12 @@ describe('AuthController (e2e)', () => {
   }, 60_000);
 
   it('keeps the liveness route public', async () => {
-    await get('/api/v1').expect(200);
+    await get('/api/v1/health').expect(200);
+  });
+
+  it('keeps the readiness route public and shaped {status, db}', async () => {
+    const res = await get('/api/v1/health/ready').expect(200);
+    expect(res.body).toEqual({ status: 'ok', db: 'up' });
   });
 
   it('rejects an unauthenticated GET /auth/me in the Section 6.1 envelope', async () => {
