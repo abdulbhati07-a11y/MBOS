@@ -46,6 +46,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 
 import { useDashboardMetrics, type DashboardRecentOrder } from "@/hooks/use-dashboard-metrics"
+import { InsightsCard } from "@/components/dashboard/InsightsCard"
 import {
   PO_STATUSES,
   type OrderStatus,
@@ -341,6 +342,13 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* Business Health (FR-AI-03). Sits below PO Status Breakdown, also
+              reports-gated — for a Cashier this whole column collapses. The
+              card is honest about insufficient data: when there is no trading
+              history the score does not render, only a 'not enough data yet'
+              state. AI-generated insights carry a visible badge per BR-08. */}
+          {business.canView && <InsightsCard />}
 
           {/* Quick Actions */}
           {quickActions.length > 0 && (

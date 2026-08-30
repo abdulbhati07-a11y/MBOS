@@ -336,6 +336,17 @@ model Product {
   poLines          POLine[]
   stockAdjustments StockAdjustment[]
 
+  // Smart Search columns (migration 20260830000000_smart_search_pgvector).
+  // Managed by raw SQL, deliberately not mapped into the client: `vector` is a
+  // pgvector type the schema language cannot express, and the embedding is
+  // written only through EmbeddingService's parameterised SQL. `@ignore` keeps
+  // the columns out of the generated types so no feature module can read or
+  // write them by accident — the declared types below exist only to satisfy
+  // the validator and do not reach the client. See
+  // backend/src/ai/embedding.service.ts.
+  embedding      String? @ignore
+  embeddingText  String? @ignore
+
   @@unique([tenantId, sku])
   @@index([tenantId, category])
 }

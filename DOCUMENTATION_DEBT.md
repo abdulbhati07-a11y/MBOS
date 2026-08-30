@@ -772,6 +772,54 @@ The first is a column and a form field. The second is a body on a status transit
 
 ---
 
+### DEBT-035 — `Product.embedding` is a fixed-size pgvector column that locks the AI feature to one embedding model
+
+**Where it needs to land:** Section 5 (ERD — the new `Product.embedding` / `Product.embeddingText` columns), and Section 4 (the AI feature's external-dependencies list, beside the provider row)
+
+**What needs to be written:** the schema, the model, and the swap path for Smart Search embeddings.
+
+`Product.embedding` is `vector(1536)`, the dimensionality of OpenAI's `text-embedding-3-small` (the default `AI_EMBEDDING_MODEL`). The dimension is part of the column type, so changing it is a `DROP COLUMN` + re-`ADD COLUMN` + full re-embed — the HNSW index has to come down with the column, and the partial index only works while the column exists. A migration that changes the type is **not** cheap, and the cost falls on every existing tenant.
+
+Three things this affects, all of which the spec section this lands in has to record:
+
+1. **Why the column is in raw SQL, not Prisma.** Prisma 7 has no native vector type. The column is added in `backend/prisma/migrations/20260830000000_smart_search_pgvector/migration.sql` and exposed to the client as `embedding String? @ignore` and `embeddingText String? @ignore` — `@ignore` keeps the field off the generated client (its writes happen through `$executeRaw` and `$queryRaw`), and `String?` is the smallest valid Prisma type the validator will accept (a more honest "owned by raw SQL" annotation does not exist in v7). The model comment explains both.
+2. **The 1536-dimension coupling.** This dimension is the right size for `text-embedding-3-small` (and a few older 1536-dim models). A 3072-dim model — `text-embedding-3-large`, or any model that produces longer vectors — cannot be swapped in by changing the env var; the migration path is a new migration that drops the column, adds a new one with the new dimension, and triggers a catalogue-wide re-embed. So the "provider-agnostic" promise of `AIProviderInterface` is a little smaller than it looks: the **interface** is provider-agnostic, the **storage** is dimension-agnostic only up to the size that was chosen. Recorded here so a future reader does not assume the column can be resized by setting an env var.
+3. **`embeddingText` is a backfill marker, not a flag.** Without an AI provider, every product write records the text the embedding *would* have been generated from, so a later activation can backfill in one pass: "rows with `embedding IS NULL` AND `embeddingText IS NOT NULL`" is the working set. A bare "needs embedding" boolean would have done the same job but lost the text once it was consumed, which would mean a partial re-embed on a second model change would have nothing to embed from. The mirror column is the slightly more honest design.
+
+**Also worth a sentence in Section 4:** the extension `vector` is **not** in stock Postgres 17 — it ships in `postgresql-17-pgvector` on Debian/Ubuntu images and in most managed Postgres offerings (Neon, Supabase, RDS, Hetzner-managed) but is not part of `postgres:17-alpine` by default and has to be added with `apk add postgresql17-pgvector` or equivalent. The migration runs `CREATE EXTENSION IF NOT EXISTS vector` so it is recoverable on a stock image, but the host that runs the production database must be one where the extension is installable, and that is a deployment-decision moment (Section 4.8) that has to name pgvector, not just "Postgres 17".
+
+**What the fix requires:** a Section 5 row on the new columns (typed, nullable, raw-SQL-owned, dimension-locked), a Section 4 row on pgvector as an external dependency, and a note in the AI section that the dimension is chosen at migration time and is part of the contract.
+
+**Interim state:** the column, the index, the mirror column and the fail-soft sync hook are all in place and verified on the dev instance. A backfill on AI enable is one script away from working once a provider is configured.
+
+**Source:** `backend/prisma/migrations/20260830000000_smart_search_pgvector/migration.sql`, `backend/prisma/schema.prisma` (`Product` model, `@ignore` fields and comment), `backend/src/ai/embedding.service.ts`, `backend/.env.example` (AI block with the dimension note), `backend/src/products/products.service.ts` (fire-and-forget hooks). Raised while implementing the AI Phase 1 Smart Search. Related: [DEBT-034].
+
+**Status:** Open — schema decision recorded, but the coupling between model choice and column dimension is the kind of thing a Section 5 reader has to be told explicitly.
+
+---
+
+### DEBT-036 — Spec identifiers quoted in the AI implementation brief do not exist in the spec
+
+**Where it needs to land:** Sections 2 (FR-AI-* and FR-REP-*) and the Business Rules section BR-*
+
+**What needs to be written:** decisions the AI Phase 1 brief referenced by identifier that no spec section defines. Three of them, each a real spec gap:
+
+1. **FR-AI-04 does not exist.** The brief asks the implementation to label AI-generated insights in the UI and cites "BR-08" as the rule. The label was implemented, but no FR-AI-04 says the feature exists at all. The closest section is FR-AI-03 (Dashboard Health Score + Reports insights), which names the score and the insights but does not name the labeling requirement. Section 2 needs an FR-AI-04 that says "every AI-generated text rendered in the UI must be visually distinguishable from a non-AI string", and points at the BR the brief cited.
+2. **FR-REP-04 does not exist.** The brief's reference to "Reports insights" (FR-AI-03's second half) is real and implemented, but the section that defines the Reports insight list is FR-REP-03 (existing reports). There is no FR-REP-04 in the spec text. Either the brief was reading ahead of the section, or the section number drifted. The implementation chose the "dashboard insights feed into the Reports page later" path, which is the right one but is not in the spec.
+3. **BR-08 is the PO state machine, not the AI-label rule.** The brief calls BR-08 the requirement that AI outputs be labeled. `BR-08` in the spec is the purchase-order state machine (Draft → Sent → Received/Cancelled). The actual rule the brief was reaching for is closer to BR-04 (no AI may be presented as a human) or no existing BR at all — it has to be added. The implementation labels AI insights anyway, because the requirement is right; the *citation* was wrong. The next reviewer who grep's "BR-08" in the code will find PO state transitions, not labeling.
+
+The pattern across all three is the same: the AI Phase 1 brief referenced a tidy set of spec identifiers, and those identifiers are not the ones the spec has. The implementation is sound, but the cross-references a future maintainer will follow are pointing at the wrong sections.
+
+**What the fix requires:** a sweep of the AI spec for missing FRs, a decision on whether BR-08 keeps the PO state machine or migrates to the labeling rule (recommend: add a new BR for the labeling rule, keep BR-08 as the PO state machine — they are unrelated concerns and a renumber is more disruption than the new rule is worth), and a corresponding update to the brief / implementation notes so the next phase cites the right identifiers.
+
+**Interim state:** labeling is implemented (`InsightsCard` shows an "AI-generated" badge on every insight with `aiGenerated: true`); the spec citation the implementation is filed under does not exist.
+
+**Source:** `backend/src/ai/`, `src/components/dashboard/InsightsCard.tsx` (the `aiGenerated` rendering branch), the AI Phase 1 brief in the prior session's transcript. Raised during the DEBT-035 review of the AI Phase 1 build. Related: [DEBT-035].
+
+**Status:** Open — implementation is correct, citations are wrong. Needs the spec amended, not the code.
+
+---
+
 ## Resolved
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*

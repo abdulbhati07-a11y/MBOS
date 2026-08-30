@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AccessControlModule } from './access-control/access-control.module';
+import { AIModule } from './ai/ai.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -86,6 +87,11 @@ import { UsersModule } from './users/users.module';
     // products for valuation, customers and suppliers for activity and spend. It
     // adds no writer and no new column, so nothing downstream depends on it.
     ReportsModule,
+    // AI features (FR-AI-03) — registered after ReportsModule because the
+    // insights read the same aggregates' tables, and after everything else for
+    // the same reason reports is last: read-only, no writer, no new column.
+    // Gated on `dashboard.read`, which every role holds.
+    AIModule,
   ],
   controllers: [AppController],
   providers: [AppService],

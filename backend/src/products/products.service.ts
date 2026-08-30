@@ -11,6 +11,8 @@ import {
 import { searchAny } from '../common/validation/query-filters';
 import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantContextService } from '../tenancy/tenant-context.service';
+import { EmbeddingService } from '../ai/embedding.service';
 import {
   CreateProductDto,
   ProductListQueryDto,
@@ -63,7 +65,11 @@ type ProductRow = {
  */
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantContext: TenantContextService,
+    private readonly embedding: EmbeddingService,
+  ) {}
 
   /** GET /products — `?category=`, `?lowStock=`, `?search=`, `?isActive=`. */
   async list(
@@ -137,6 +143,12 @@ export class ProductsService {
         data: { ...data, deletedAt: null },
         select: PRODUCT_SELECT,
       });
+      // Fire-and-forget Smart Search sync (post-commit, fail-soft — see
+      // EmbeddingService). Not awaited: the create response must not wait on
+      // a network embedding call, and a failure there logs but never 500s.
+      void this.embedding
+        .syncProduct(this.tenantContext.getTenantId() ?? '', revived)
+        .catch(() => undefined);
       return toResponse(revived);
     }
 
@@ -148,6 +160,9 @@ export class ProductsService {
       } as Prisma.ProductUncheckedCreateInput,
       select: PRODUCT_SELECT,
     });
+    void this.embedding
+      .syncProduct(this.tenantContext.getTenantId() ?? '', created)
+      .catch(() => undefined);
     return toResponse(created);
   }
 
@@ -186,6 +201,11 @@ export class ProductsService {
       },
       select: PRODUCT_SELECT,
     });
+    // Text fields may have changed; keep the embedding in step (fail-soft,
+    // post-commit — see EmbeddingService).
+    void this.embedding
+      .syncProduct(this.tenantContext.getTenantId() ?? '', updated)
+      .catch(() => undefined);
     return toResponse(updated);
   }
 
@@ -226,6 +246,11 @@ export class ProductsService {
       data: { deletedAt: new Date(), isActive: false },
       select: PRODUCT_SELECT,
     });
+    // The product left the searchable catalogue; drop its vector so the HNSW
+    // index stays free of dead rows (fail-soft, post-commit).
+    void this.embedding
+      .clearProduct(this.tenantContext.getTenantId() ?? '', id)
+      .catch(() => undefined);
     return toResponse(deleted);
   }
 

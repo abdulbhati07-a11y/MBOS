@@ -7,6 +7,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/shared/Sidebar"
+import { GlobalSearch } from "@/components/shared/GlobalSearch"
 import { Separator } from "@/components/ui/separator"
 import {
   Breadcrumb,
@@ -106,7 +107,22 @@ function AppShellHeader() {
         )}
       </div>
 
+      {/* Smart Search (FR-AI-01). Press `/` from anywhere to focus. Sits in
+          the centre of the header on md+ screens, collapses to a fixed-width
+          box on small screens. The component handles its own permission /
+          no-data states — the search endpoint collapses to an empty result
+          when the role cannot read inventory. */}
+      <div className="hidden flex-1 justify-center px-4 md:flex">
+        <GlobalSearch />
+      </div>
+
       <div className="flex items-center gap-4">
+        {/* Smart Search on small screens. The `md:flex` header bar above is
+            hidden below md, so this collapsible input is the only path in.
+            `fullWidth` keeps the panel from clipping on narrow viewports. */}
+        <div className="md:hidden">
+          <GlobalSearch />
+        </div>
         {/* Branch Switcher stub — renamed from "Tenant Switcher" per Section 5
             decision: one user belongs to one tenant; this control selects among
             branches within the same tenant. Real implementation pending Branch
