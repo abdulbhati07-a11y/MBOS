@@ -1,0 +1,58 @@
+# =============================================================================
+# Top-level .dockerignore
+#
+# The frontend Dockerfile build context is the repo root (it needs next.config.ts,
+# package.json, public/, src/, and tsconfig.json at the root). Block everything
+# else: the backend tree, build outputs, env files, VCS, IDE, test, and AI skill
+# caches. The backend uses its own .dockerignore when built in isolation, but
+# this file is the one the frontend COPY sees.
+# =============================================================================
+
+# Anything in the backend tree. The frontend has no business reading it at
+# build time; if a future build needs to import backend code, the import path
+# is the wrong answer.
+/backend
+
+# VCS + IDE + agent caches — the build doesn't need them and they bloat the
+# context. .claude / .agents / .windsurf are third-party tooling symlinks
+# (see backend/.gitignore for the same reasoning).
+/.git
+/.gitignore
+/.vscode
+/.claude
+/.agents
+/.windsurf
+
+# Local environment files. The container's environment comes from the
+# compose `env_file` or runtime injection — never from a host .env.
+.env
+.env.*
+!.env.production.example
+
+# Node / build outputs that should be reproduced inside the image, not
+# copied in.
+/node_modules
+/.next
+/out
+/build
+/coverage
+**/tsconfig.tsbuildinfo
+**/next-env.d.ts
+
+# Test artifacts, the dev-only design tokens page, and editor / agent
+# caches that have no place in a build context.
+/test
+/test-results
+/playwright-report
+/docs
+/DOCUMENTATION_DEBT.md
+/AGENTS.md
+/CLAUDE.md
+/README.md
+/components.json
+
+# NOTE: `tsconfig.json`, `postcss.config.mjs`, `eslint.config.mjs`, and
+# `middleware.ts` are intentionally NOT excluded — `next build` reads
+# each of them. The lint config is required by the `next build`
+# pre-step the framework runs in CI mode; removing it produces a
+# successful build with a warning that the lint stage was skipped.
