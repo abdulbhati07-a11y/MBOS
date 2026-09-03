@@ -1,0 +1,155 @@
+# GitHub Actions CI pipeline for MBOS
+#
+# Three jobs run in parallel:
+#   1. backend  - lint, build, and unit-test the NestJS API
+#   2. frontend - lint and build the Next.js app
+#   3. e2e      - (workflow_dispatch only) spin up Postgres + run e2e suites
+#
+# Triggers: push to main + every PR. E2E is opt-in to keep PR CI fast.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch on a new push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Backend tests need a reachable Postgres. We use the GitHub Actions service
+  # container (see backend-e2e job). For unit tests we run without a database
+  # because Jest specs that touch Prisma are excluded by their `*.spec.ts`
+  # naming and the e2e suite is what actually exercises the DB.
+  NODE_VERSION: '22'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend: lint, build, unit test
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend (lint + build + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        # Unit tests only — e2e suite needs a live DB and runs in its own job.
+        run: npm test -- --testPathIgnorePatterns=e2e-spec
+
+  # ---------------------------------------------------------------------------
+  # Frontend: lint, build
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        # NEXT_PUBLIC_API_URL is required at build time; use a placeholder
+        # because the production value is injected by docker-compose at deploy.
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # E2E: spin up Postgres, run migrations, run e2e suites
+  # Only on workflow_dispatch to keep PR CI fast and not burn minutes.
+  # ---------------------------------------------------------------------------
+  backend-e2e:
+    name: Backend E2E
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mbos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mbos_test
+      JWT_ACCESS_SECRET: ci-access-secret-not-for-production-use-64-bytes-long
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-for-production-use-64-bytes-long
+      NODE_ENV: development
+      SEED_DEV_TENANT: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Run E2E tests
+        run: npm run test:e2e
