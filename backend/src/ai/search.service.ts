@@ -1,10 +1,3 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { TenantContextService } from '../tenancy/tenant-context.service';
-import { AI_PROVIDER } from './ai-provider.interface';
-import type { AIProviderInterface } from './ai-provider.interface';
-import { SearchProductHit, SearchResponse } from './dto/search.dto';
-
 /**
  * Smart Search (Phase 1) — natural-language product lookup.
  *
@@ -30,7 +23,19 @@ import { SearchProductHit, SearchResponse } from './dto/search.dto';
  * This is a deliberate, documented divergence from a 403: the endpoint is a
  * global search box, and an empty section is the honest result for "you may
  * not see this section".
+ *
+ * HYBRID RANKING — When vector search returns fewer results than requested,
+ * the remaining slots are filled from text search results and combined using
+ * Reciprocal Rank Fusion (RRF) for optimal ranking. This provides better
+ * results when only a subset of products have embeddings.
  */
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { TenantContextService } from '../tenancy/tenant-context.service';
+import { AI_PROVIDER } from './ai-provider.interface';
+import type { AIProviderInterface } from './ai-provider.interface';
+import { SearchProductHit, SearchResponse } from './dto/search.dto';
+
 interface SearchRow {
   id: string;
   name: string;
@@ -41,6 +46,12 @@ interface SearchRow {
   isActive: boolean;
   similarity?: number;
 }
+
+// Reciprocal Rank Fusion (RRF) constant - higher values give more weight to top results
+const RRF_CONSTANT = 60;
+
+// Maximum number of results to return
+const MAX_RESULTS = 20;
 
 @Injectable()
 export class SearchService {
@@ -78,12 +89,39 @@ export class SearchService {
     if (this.ai.isConfigured()) {
       try {
         const vector = await this.ai.generateEmbedding(q);
-        const rows = await this.vectorSearch(tenantId, vector);
-        if (rows.length > 0) {
+        const vectorRows = await this.vectorSearch(tenantId, vector);
+
+        // If we got vector results, use them
+        if (vectorRows.length > 0) {
+          // If we have fewer vector results than max, fill remaining from text search
+          if (vectorRows.length < MAX_RESULTS) {
+            const textRows = await this.textSearch(tenantId, q);
+            const combined = this.combineResults(
+              vectorRows,
+              textRows,
+              MAX_RESULTS,
+            );
+            return {
+              query: q,
+              engine: 'vector',
+              products: combined.map<SearchProductHit>((r, index) => ({
+                id: r.id,
+                name: r.name,
+                sku: r.sku,
+                category: r.category,
+                priceCents: r.priceCents,
+                stock: r.stock,
+                isActive: r.isActive,
+                matchedBy: index < vectorRows.length ? 'vector' : 'text',
+                similarity: r.similarity ?? null,
+              })),
+            };
+          }
+
           return {
             query: q,
             engine: 'vector',
-            products: rows.map<SearchProductHit>((r) => ({
+            products: vectorRows.map<SearchProductHit>((r) => ({
               id: r.id,
               name: r.name,
               sku: r.sku,
@@ -119,6 +157,64 @@ export class SearchService {
         similarity: null,
       })),
     };
+  }
+
+  /* ----------------------------------------------------------------------
+   * Hybrid ranking: combine vector and text results using Reciprocal Rank Fusion
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Combine vector and text search results using RRF (Reciprocal Rank Fusion).
+   * This provides better ranking when we have partial embeddings.
+   */
+  private combineResults(
+    vectorResults: SearchRow[],
+    textResults: SearchRow[],
+    maxResults: number,
+  ): SearchRow[] {
+    // Create a map of all results by ID to deduplicate
+    const allResultsMap = new Map<
+      string,
+      { row: SearchRow; vectorRank: number; textRank: number }
+    >();
+
+    // Add vector results with their ranks
+    vectorResults.forEach((row, index) => {
+      const existing = allResultsMap.get(row.id);
+      if (existing) {
+        existing.vectorRank = index + 1;
+      } else {
+        allResultsMap.set(row.id, { row, vectorRank: index + 1, textRank: 0 });
+      }
+    });
+
+    // Add text results with their ranks
+    textResults.forEach((row, index) => {
+      const existing = allResultsMap.get(row.id);
+      if (existing) {
+        existing.textRank = index + 1;
+      } else {
+        allResultsMap.set(row.id, { row, vectorRank: 0, textRank: index + 1 });
+      }
+    });
+
+    // Calculate RRF scores and sort
+    const resultsWithScores = Array.from(allResultsMap.values())
+      .map(({ row, vectorRank, textRank }) => {
+        // RRF score: sum of 1/(k + rank) for each result set
+        // Higher k gives more weight to top results
+        const vectorScore =
+          vectorRank > 0 ? 1 / (RRF_CONSTANT + vectorRank) : 0;
+        const textScore = textRank > 0 ? 1 / (RRF_CONSTANT + textRank) : 0;
+        const score = vectorScore + textScore;
+        return { row, score };
+      })
+      .filter(({ score }) => score > 0) // Only include results that appeared in at least one set
+      .sort((a, b) => b.score - a.score) // Higher score first
+      .slice(0, maxResults); // Limit to max results
+
+    // Extract just the rows in order
+    return resultsWithScores.map(({ row }) => row);
   }
 
   /* ---------------------------------------------------------------------- */

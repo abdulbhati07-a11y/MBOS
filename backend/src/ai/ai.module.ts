@@ -1,9 +1,11 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AI_PROVIDER } from './ai-provider.interface';
+import { AIController } from './ai.controller';
 import { HealthInsightsController } from './health-insights.controller';
 import { HealthInsightsService } from './health-insights.service';
 import { NoopAIProvider } from './noop-ai.provider';
+import { OpenAICompatibleAIProvider } from './openai-ai.provider';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
 
@@ -31,17 +33,19 @@ import { SearchService } from './search.service';
  */
 @Global()
 @Module({
-  controllers: [HealthInsightsController, SearchController],
+  controllers: [AIController, HealthInsightsController, SearchController],
   providers: [
     HealthInsightsService,
     SearchService,
     {
       provide: AI_PROVIDER,
       useFactory: (config: ConfigService) => {
-        // One branch today. `AI_API_KEY` is the single switch; when a concrete
-        // provider lands it is constructed here with `config` and this comment
-        // moves into its own file.
-        void config;
+        // Select provider based on AI_API_KEY presence, exactly like
+        // MailModule selects SMTP vs Console based on SMTP_HOST.
+        const apiKey = config.get<string>('AI_API_KEY');
+        if (apiKey) {
+          return new OpenAICompatibleAIProvider(config);
+        }
         return new NoopAIProvider();
       },
       inject: [ConfigService],
