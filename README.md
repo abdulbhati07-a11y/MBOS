@@ -183,6 +183,14 @@ both suites on every PR, and the e2e job deliberately sets a sentinel
 
 ## Conventions
 
+- **One backend layout: flat feature folders.** `backend/src/<feature>/`
+  holds that feature's module, controller, service and `dto/` together —
+  `products/`, `orders/`, `auth/`, and so on. Cross-cutting concerns get a
+  sibling folder (`common/`, `config/`, `prisma/`, `tenancy/`,
+  `rate-limit/`, `access-control/`, `mail/`, `ai/`). There is no
+  layer-first tree; an abandoned `domain/` `application/` `infrastructure/`
+  `presentation/` scaffold was removed rather than left as a second
+  pattern for a reader to choose between.
 - **No provider-specific SDKs in the application code.** The AI
   integration goes through `AIProviderInterface`; the mail integration
   goes through `MAIL_PROVIDER`. Adding a new provider means writing one
