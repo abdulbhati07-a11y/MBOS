@@ -124,6 +124,41 @@ network (`docker network connect mbos_default caddy`).
 
 ## 3. Build and start
 
+**If your database is Supabase, do §3.0 first** — otherwise the commands
+below connect without a trust anchor and fail.
+
+### 3.0 Supabase: the CA overlay
+
+Supabase's cert chains to a private root Node does not ship, so the root
+has to be pinned. Download it once
+(*Project Settings → Database → Connection string → SSL Certificate →
+Download*), save it as `backend/supabase-ca.crt` — full walkthrough in
+[supabase-setup.md](./supabase-setup.md) — then add the overlay that
+mounts it to every compose command:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
+```
+
+Rather than repeat the flags, set this once in a root `.env` (compose
+reads that file for its own configuration) and every command in this
+document works unchanged:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.supabase.yml
+```
+
+The cert is not in the base compose file because compose has no optional
+bind mount — naming an absent host file would break `up` for every
+deployment that does not need a private CA. It is gitignored, so each
+deployment downloads its own rather than inheriting one that will go
+stale.
+
+Skip this section entirely for stock Postgres, the `local-db` profile, or
+any provider with a publicly-trusted cert.
+
+### 3.1 Build and bring up
+
 ```bash
 # Build images. The frontend build bakes NEXT_PUBLIC_API_URL into the
 # bundle — make sure .env.production has the right value before this.
@@ -141,7 +176,7 @@ docker compose logs -f backend
 A successful first boot ends with `[entrypoint] starting API…` and the
 `backend` service reporting `healthy` in `docker compose ps`.
 
-### 3.1 One-shot migration (alternative)
+### 3.2 One-shot migration (alternative)
 
 If you want to apply migrations without restarting the API, use the
 `migrate` profile:
@@ -153,7 +188,7 @@ docker compose --profile migrate run --rm migrate
 This runs `prisma migrate deploy` against the database pointed at by
 `DATABASE_URL` and exits. The backend service is not started.
 
-### 3.2 Local development (no Supabase)
+### 3.3 Local development (no Supabase)
 
 For a fully-local stack with a Postgres in Docker, override
 `DATABASE_URL` and start the `local-db` profile:
@@ -215,6 +250,98 @@ A checklist to run after the stack is up:
    login page. With SMTP configured, the email arrives within a few
    seconds. Without SMTP, the same call is logged to the backend's
    stdout and a token appears in the log line — never in the response.
+
+---
+
+## 5b. AI features (optional)
+
+The AI features (Smart Search, Dashboard Health Insights) are
+**off by default** and degrade to non-AI behaviour when unconfigured
+(FR-AI-01). Enabling them is a four-step process; skipping any step
+leaves the feature on its fallback path.
+
+### 5b.1 Configuration
+
+Set the four env vars on the backend container, then restart:
+
+| Variable               | Required | Default                       | Notes                                                |
+| ---------------------- | -------- | ----------------------------- | ---------------------------------------------------- |
+| `AI_API_KEY`           | yes      | (unset)                       | The provider key. Empty/unset keeps AI off.          |
+| `AI_API_BASE_URL`      | no       | `https://api.openai.com/v1`   | OpenAI-compatible. Use for self-hosted gateways.     |
+| `AI_EMBEDDING_MODEL`   | no       | `text-embedding-3-small`      | Output dim must match `vector(N)` in the schema.     |
+| `AI_CHAT_MODEL`        | no       | `gpt-4o-mini`                 | Any chat model the provider accepts.                 |
+
+The factory in `backend/src/ai/ai.module.ts` reads `AI_API_KEY` once at
+process start. The class it binds (`OpenAICompatibleAIProvider` if
+the key is set, `NoopAIProvider` otherwise) is fixed for the life of
+the process. To change providers you must restart the backend
+(DEBT-038).
+
+### 5b.2 Database prerequisites
+
+The `Product.embedding` column is `vector(1536)`, sized for
+`text-embedding-3-small`. This is part of the schema, so the column
+and its HNSW index already exist in production once the
+`20260830000000_smart_search_pgvector` migration has run. No extra
+step is needed for Supabase: the migration is a no-op if pgvector
+is already enabled and creates the extension otherwise.
+
+> **Managed Postgres note:** the `vector` extension is not part of
+> stock Postgres 17. On Supabase it is available out of the box; on a
+> self-hosted Postgres, install the matching
+> `postgresql-17-pgvector` package before the first migration. See
+> DEBT-035 for the full list of providers where this is and is not
+> already installed.
+
+### 5b.3 Data disclosure (FR-AI-02)
+
+Enabling AI means tenant data leaves the backend and goes to the
+configured provider. The OpenAI provider's class-level docstring
+(`backend/src/ai/openai-ai.provider.ts`) lists exactly what is sent
+per method:
+
+- `generateEmbedding` — product name, category, SKU, and the
+  user's search query.
+- `complete` / `generateInsights` — business aggregates
+  (counts, money totals) passed in the prompt.
+- `generateSuggestion` — the user prompt, which may include
+  business context.
+
+This is a **per-tenant disclosure** and must be surfaced in the
+operator's privacy notice and in the tenant onboarding flow. There
+is no per-request opt-out today (DEBT-038); a tenant that must
+not have its data sent to a third party should run on a deployment
+where `AI_API_KEY` is not set.
+
+### 5b.4 Backfilling existing products
+
+Products created while AI was off have `embeddingText` set but
+`embedding` null. To embed them:
+
+```bash
+docker compose exec backend npm run ai:reembed
+```
+
+The script iterates tenants, then products in batches, and writes
+the embedding back through `$executeRaw`. It is **idempotent** —
+running it twice produces the same end state — so it is safe to
+re-run on partial failure. The HTTP endpoint
+`POST /api/v1/ai/reembed` is a stub that returns immediately with a
+job ID; the CLI is the only path that actually processes rows
+(DEBT-037).
+
+### 5b.5 Verifying it works
+
+```bash
+docker compose exec backend node -e "fetch('http://localhost:3001/api/v1/ai/status', { headers: { Authorization: 'Bearer ' + process.env.TOKEN } }).then(r => r.json()).then(console.log)"
+```
+
+A configured provider returns `{"configured": true, "provider":
+"openai-compatible", ...}`. With no `AI_API_KEY` the same endpoint
+returns `{"configured": false, "provider": null, ...}` and every AI
+feature has fallen back to its non-AI path. `GET /api/v1/ai/stats`
+reports the per-tenant embedding coverage so you can see the backfill
+progress without running a query.
 
 ---
 
@@ -292,6 +419,57 @@ create extension if not exists vector;
 The 20260830000000_smart_search_pgvector migration is the first one
 that needs it — a fresh project will fail on that one until the
 extension is created.
+
+### `self-signed certificate in certificate chain` on the Supabase direct connection
+
+Supabase's Postgres serves a cert chained to a **private root CA**
+(`Supabase Root 2021 CA`) that Node's bundled CA store does not trust.
+The TLS handshake starts fine, but `node-postgres` refuses the chain.
+
+Fix: download the CA cert from the Supabase dashboard
+(*Project Settings → Database → Connection string → SSL Certificate →
+Download*), save it as `backend/supabase-ca.crt`, and bring the stack up
+with the Supabase overlay, which mounts it at `/etc/mbos/supabase-ca.crt`
+and sets `DATABASE_CA_CERT_PATH`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
+```
+
+The root cert alone is enough — the server presents its intermediate
+during the handshake, so there is no need to concatenate a bundle. The
+same file works from the host when running the seed or migrations
+locally; point `DATABASE_CA_CERT_PATH` in `backend/.env` at its absolute
+path.
+
+The cert is **required** for Supabase, not a nicety. Without it the
+connection is refused outright (`XX000 SSL connection is required for
+user: postgres`) — there is no working fallback to the bundled CA store.
+And if `DATABASE_CA_CERT_PATH` is set but unreadable, the backend
+deliberately refuses to boot rather than downgrade to an unverified
+connection; the startup error names the path.
+
+Stock Postgres, the `local-db` profile, and providers whose certs chain
+to a publicly-trusted root need none of this: use the base compose file
+on its own and leave `DATABASE_CA_CERT_PATH` unset.
+
+### `DATABASE_URL contains an sslmode parameter` at startup
+
+Deliberate guard, not a bug. `pg-connection-string` turns any
+`?sslmode=...` into its own `ssl` object which **replaces** the pinned
+CA, reintroducing the `self-signed certificate` failure above. TLS is
+mandatory on Supabase's side regardless, so the parameter only does
+harm. Remove it from `DATABASE_URL`.
+
+### Migrations succeed but do not verify the Supabase CA
+
+Worth knowing if you are reasoning about the trust boundary:
+`prisma migrate deploy` connects over TLS but does **not** verify the
+server chain against your pinned root. Prisma 7's schema engine ignores
+`PGSSLROOTCERT` and the URL's `sslrootcert` — migrations succeed with the
+variable unset, with a bogus path, and even with
+`sslmode=verify-full&sslrootcert=<bogus>`. The application's own runtime
+pool (`PrismaService`) *does* verify. Tracked as DEBT-040.
 
 ### Backend healthcheck flapping (passes then fails then passes)
 

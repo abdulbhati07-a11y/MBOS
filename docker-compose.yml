@@ -17,6 +17,10 @@
 # All environment is passed through `.env.production` (gitignored). Override
 # individual values from the shell with `KEY=value docker compose up` —
 # compose's precedence is shell > env_file > defaults in this file.
+#
+# Databases behind a private CA (Supabase) additionally need the overlay
+# `docker-compose.supabase.yml`, which mounts the downloaded root cert. See
+# that file's header and docs/supabase-setup.md.
 # =============================================================================
 
 # Use the modern compose spec. `name` gives the project a stable namespace
@@ -78,6 +82,13 @@ services:
   # Compose's `depends_on: condition: service_healthy` only applies when
   # the `db` service is actually started (the local-db profile). With
   # the default profile, the backend connects to Supabase directly.
+  #
+  # NO CA CERT IS WIRED IN HERE, deliberately. Compose has no concept of an
+  # optional bind mount: naming a host file that does not exist either fails
+  # `up` or (on some daemons) silently mounts a directory in its place, so a
+  # fresh clone without a downloaded cert could not start at all. Databases
+  # with a private CA — Supabase — get their cert from the companion overlay
+  # `docker-compose.supabase.yml`. See that file's header for usage.
   # ---------------------------------------------------------------------------
   backend:
     build:
@@ -175,6 +186,9 @@ services:
   # This starts the backend image, runs `prisma migrate deploy` against
   # the database, and exits. The `--rm` removes the throwaway container
   # when it exits. The backend service is not started in this mode.
+  #
+  # As with `backend`, no CA cert is wired in here — see the overlay
+  # `docker-compose.supabase.yml`, which extends this service too.
   # ---------------------------------------------------------------------------
   migrate:
     profiles: ["migrate"]

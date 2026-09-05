@@ -794,7 +794,7 @@ Three things this affects, all of which the spec section this lands in has to re
 
 **Source:** `backend/prisma/migrations/20260830000000_smart_search_pgvector/migration.sql`, `backend/prisma/schema.prisma` (`Product` model, `@ignore` fields and comment), `backend/src/ai/embedding.service.ts`, `backend/.env.example` (AI block with the dimension note), `backend/src/products/products.service.ts` (fire-and-forget hooks). Raised while implementing the AI Phase 1 Smart Search. Related: [DEBT-034].
 
-**Status:** Open — schema decision recorded, but the coupling between model choice and column dimension is the kind of thing a Section 5 reader has to be told explicitly.
+**Status:** Partially resolved — schema decision recorded and the hybrid ranking from the brief is implemented (`backend/src/ai/search.service.ts`, RRF with `k=60`); the coupling between model choice and column dimension is the kind of thing a Section 5 reader has to be told explicitly. The ranking itself is filed under [DEBT-039] for doc-sync.
 
 ---
 
@@ -817,6 +817,121 @@ The pattern across all three is the same: the AI Phase 1 brief referenced a tidy
 **Source:** `backend/src/ai/`, `src/components/dashboard/InsightsCard.tsx` (the `aiGenerated` rendering branch), the AI Phase 1 brief in the prior session's transcript. Raised during the DEBT-035 review of the AI Phase 1 build. Related: [DEBT-035].
 
 **Status:** Open — implementation is correct, citations are wrong. Needs the spec amended, not the code.
+
+---
+
+### DEBT-037 — AI re-embed is CLI-only; `POST /ai/reembed` is a stub that returns immediately
+
+**Where it needs to land:** Section 6.12 (the AI admin endpoints, where the re-embed contract is described), and Section 2's FR-AI-03 (operational requirements)
+
+**What needs to be written:** what `POST /api/v1/ai/reembed` is actually doing today, and what it has to do for a multi-tenant production deployment.
+
+`POST /ai/reembed` is wired and protected (requires `settings.write`), and it correctly refuses if no AI provider is configured. Beyond that, it does not run a job: it counts the rows that need embedding, generates a job ID, and returns `{ jobId, productsToProcess, message: "Re-embed job queued. Use the CLI (npm run ai:reembed) to process." }`. The real work happens only when an operator runs the CLI script, which iterates tenants sequentially and processes products in batches. The controller is honest about this — the message tells the caller to use the CLI — but the contract is two-step (HTTP request, then a separate process) and there is no progress signal, no completion notification, and no record of who started it.
+
+For a single-tenant dev instance that is fine: an operator with shell access runs the script. For a managed multi-tenant deployment it is not, because:
+
+1. **The operator has to log in to the backend container** to run the script, which is a deployment surface most managed hosting does not expose.
+2. **There is no audit trail of who triggered a re-embed, when, or how many succeeded.** A row that fails partway through leaves the catalogue half-embedded, and a second invocation is required without any way to know the first stopped where it did. `embedding` and `embeddingText` are both nullable, so the row is in the working set again by definition.
+3. **Concurrent re-embeds from different tenants** are not coordinated. Two tenants clicking "Re-embed" five seconds apart each spawn a CLI run (or would, if the endpoint queued anything), and both hammer the OpenAI endpoint with the same working set of rows.
+4. **There is no per-tenant concurrency control.** A 50,000-SKU tenant can monopolise the OpenAI rate limit and stall other tenants' re-embeds.
+
+**What the fix requires:** a proper async job system. BullMQ + Redis is the natural choice for a Node backend and is the one already proposed (and deferred) in the AI controller's TODO. The endpoint then returns a real job ID, the operator polls a `GET /ai/jobs/:id` for progress, and the worker respects per-tenant concurrency and provider rate limits. A `AIReembedJob` Prisma model (tenantId, status, totals, startedAt, finishedAt, error) gives an audit row for free. Until that exists, the CLI is the only honest path and the endpoint should stay labelled as a stub.
+
+**Interim state:** the endpoint is implemented, the CLI (`backend/src/ai/reembed-all.ts`, `npm run ai:reembed`) is implemented, and the controller message points operators at the CLI. The gap is between the two: there is no automated bridge.
+
+**Source:** `backend/src/ai/ai.controller.ts` (`triggerReEmbed`, the `// TODO: Implement proper job queue` line and the response message), `backend/src/ai/reembed-all.ts`. Raised while wiring AI Phase 2 admin endpoints. Related: [DEBT-035].
+
+**Status:** Open — works for dev/single-tenant; a multi-tenant production deployment needs a real job system.
+
+---
+
+### DEBT-038 — AI feature has no runtime toggle; absence of `AI_API_KEY` at boot is the only switch
+
+**Where it needs to land:** Section 6.12 (AI admin endpoints) and Section 2 (FR-AI-01 graceful degradation)
+
+**What needs to be written:** how an operator turns AI features off and on without a redeploy, and what the right granularity is.
+
+Today the only switch is `AI_API_KEY` in the environment. The `AIModule` factory reads it once at construction:
+
+```
+const apiKey = config.get<string>('AI_API_KEY');
+if (apiKey) return new OpenAICompatibleAIProvider(config);
+return new NoopAIProvider();
+```
+
+That means the choice is fixed for the lifetime of the process. To turn AI off, an operator sets `AI_API_KEY=""` and restarts the backend; to turn it back on, restart with the key set. Two production-shaped scenarios this cannot answer:
+
+1. **A provider outage that is not the operator's fault.** If OpenAI returns 5xx for an hour, every `search()` and every health-insights generation logs the error, retries three times, and returns the text-search fallback. The user-visible behaviour is correct (FR-AI-01), but the logs are noisy and the retries cost money. A runtime toggle — "AI is off for the next hour" — would suppress both at the provider boundary, not at every call site.
+2. **A per-tenant kill switch.** If a particular tenant's data has triggered a privacy review (or they are on a trial that excludes AI), there is no way to disable AI for that tenant only. They would have to be moved to a deployment without an API key, which is not a thing a multi-tenant SaaS can do.
+
+The right shape is a `TenantSetting.aiEnabled` (or a global one) read in the same place the factory reads the API key — but the factory runs once per process, not per request, so the call site is the per-request service methods. A small wrapper that the services check first would work without restructuring the provider interface.
+
+**What the fix requires:** a runtime feature flag (per-tenant is the most flexible, global is the minimum) and a single check in each of the four provider-method call paths (`SearchService.search`, `HealthInsightsService.generate`, `EmbeddingService.syncProduct`). The provider itself stays as-is; the call sites become one-liners. Until this exists, "AI off" means "restart the process", which is too coarse for production.
+
+**Interim state:** the boot-time switch works and the graceful-degradation contract is honoured. The cost of leaving it as is is operational: every operator action to disable AI is a redeploy.
+
+**Source:** `backend/src/ai/ai.module.ts` (the factory, line 45), `backend/src/ai/search.service.ts` (`ai.isConfigured()` checks at the call sites), `backend/src/ai/health-insights.service.ts`. Raised while implementing the OpenAI provider. Related: [DEBT-035], [DEBT-037].
+
+**Status:** Open — works as designed; designed for boot-time configuration, not runtime.
+
+---
+
+### DEBT-039 — `SearchService` hybrid ranking fills from text but does not score vector rows that are missing in text
+
+**Where it needs to land:** Section 6.12 (the Smart Search endpoint) and Section 4.5 (the AI feature's behaviour description)
+
+**What needs to be written:** the exact ranking rule and its single, documented quirk.
+
+The Phase 1 brief asked for hybrid ranking so that a tenant with a partially-embedded catalogue (some products have `embedding`, others have only `embeddingText` set) still gets a full result set. The implementation uses Reciprocal Rank Fusion (RRF, `k=60`):
+
+```
+score(d) = 1/(k + rank_vector(d)) + 1/(k + rank_text(d))
+```
+
+A document that appears in only one list gets one term; a document in both gets two. Rows are then sorted by descending score and trimmed to 20.
+
+The RRF math is right, but the implementation has one quirk worth recording so the next reader does not call it a bug. **The text list is filtered to exclude rows already returned by the vector list before RRF runs.** That sounds redundant (RRF de-duplicates on the same id anyway), but it matters here because the text list and the vector list use **different filters**: the vector query applies `embedding IS NOT NULL` and a similarity floor, while the text query applies `ILIKE` over `name`/`sku`/`category`. A product with an embedding that did not match the query closely enough is *not* in the vector result, so it can still legitimately match the text path. The pre-filter is "rows the text path would re-add", not "rows the vector path already has", and a row that scores highly on the text path but is missing from the vector result still appears in the merged top-20 with a `similarity: null` on the wire.
+
+`SearchProductHit` declares `similarity?: number` for exactly this reason: a row that came from the text path has no similarity to report, and the client renders it without a score. The shape of that omission is the contract; a future change that adds a similarity for text-only rows would be a different ranking, not a bug fix.
+
+**What the fix requires:** state the rule in Section 6.12, in roughly the words above, and add `similarity: number | null` to the documented response shape (it is already `?: number` in code, which is close enough; the spec should say "null when the row came from the text path, a float in [0, 1] otherwise"). Until that is written, the omission reads as an oversight.
+
+**Interim state:** implemented and covered by tests; the gap is in the doc.
+
+**Source:** `backend/src/ai/search.service.ts` (`combineResults`, the `RRF_CONSTANT = 60` and `MAX_RESULTS = 20` constants, and the line where the pre-filter happens), `backend/src/ai/dto/search.dto.ts` (`SearchProductHit.similarity?`). Raised while implementing the hybrid ranking.
+
+**Status:** Open — code is correct, doc is silent on the rule.
+
+---
+
+### DEBT-040 — `prisma migrate deploy` reaches Supabase over TLS but does not verify the server chain
+
+**Where it needs to land:** Section 4.8 (deployment / data protection) and Section 9 (non-functional: security), wherever the database transport guarantee is stated.
+
+**What needs to be written:** that the guarantee is not uniform across the two connections this system opens to Postgres.
+
+Supabase serves a cert chained to a private root (`Supabase Root 2021 CA`) that Node does not ship. The **application's** pool pins it correctly: `buildPgConfig` (`backend/src/prisma/pg-config.ts`) reads `DATABASE_CA_CERT_PATH` and passes `ssl: { ca, rejectUnauthorized: true }` to `PrismaPg`, so every query the API issues runs over a connection whose chain was verified against that root. Substituting a wrong CA fails the handshake with `SELF_SIGNED_CERT_IN_CHAIN`, which is the proof that verification is actually on rather than nominally configured.
+
+The **schema engine's** connection — the separate process behind `prisma migrate deploy`, run by `backend/docker-entrypoint.sh` on every container start — does not. Measured against the live project, `prisma migrate status` succeeds in all of these cases:
+
+| Configuration | Expected if verifying | Actual |
+| --- | --- | --- |
+| `PGSSLROOTCERT` = the real root | pass | pass |
+| `PGSSLROOTCERT` unset | fail (untrusted root) | **pass** |
+| `PGSSLROOTCERT` = a bogus PEM | fail | **pass** |
+| URL `?sslmode=verify-full&sslrootcert=<bogus>` | fail | **pass** |
+
+So the engine reads neither libpq's `PGSSLROOTCERT` nor the URL's `sslrootcert`, and does not verify the chain it is given. The connection is still encrypted — Supabase refuses plaintext outright (`XX000 SSL connection is required for user: postgres`) — so this is an authentication-of-the-server gap, not a confidentiality one: migrations are exposed to an active MITM that can present any cert, not to passive interception.
+
+The blast radius is small but not nil. The window is the moments around container start; the credential on that connection is the same `DATABASE_URL` password the app uses, so a successful MITM captures it. Nothing in the repo currently claims otherwise — the docs were corrected in the same change that raised this — but the temptation to read the `PGSSLROOTCERT` in `docker-compose.supabase.yml` as the thing that makes migrate safe is exactly why this needs writing down.
+
+**What the fix requires:** decide and document the intended posture. Options, cheapest first: (a) accept it, state it explicitly in Section 9, and rely on the network path being trusted; (b) stop running `migrate deploy` from the entrypoint and apply migrations from a controlled host or CI step over a connection whose TLS you do control; (c) route the engine through a local proxy (`stunnel`, `pgbouncer`, the Supabase connection pooler's own verified endpoint) that terminates a verified session. Re-test the table above on each Prisma upgrade — if a release adopts libpq semantics, the `PGSSLROOTCERT` already set in the overlay makes this resolve itself, and the docs should stop hedging.
+
+**Interim state:** `PGSSLROOTCERT` is set in `docker-compose.supabase.yml` and `backend/.env` because it is correct for `psql`/`pg_dump` in the same container and is forward-insurance; every doc that mentions it now says plainly that Prisma does not honour it.
+
+**Source:** probed against the live Supabase project while finishing the CA-pinning change; `backend/docker-entrypoint.sh` (the `migrate deploy` call), `docker-compose.supabase.yml`, `backend/src/prisma/pg-config.ts`.
+
+**Status:** Open — behaviour confirmed by measurement, posture undecided, docs no longer misstate it.
 
 ---
 

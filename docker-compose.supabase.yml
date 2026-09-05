@@ -1,0 +1,78 @@
+# =============================================================================
+# MBOS — Supabase (private CA) compose overlay
+#
+# Supabase serves a certificate chained to `Supabase Root 2021 CA`, which is
+# NOT in Node's bundled trust store. Without pinning that root the backend
+# fails to connect with `SELF_SIGNED_CERT_IN_CHAIN`; without TLS at all
+# Supabase refuses the session outright (`XX000 SSL connection is required`).
+# So against Supabase the cert is mandatory — it is not an optimisation.
+#
+# This lives in a separate file rather than the base `docker-compose.yml`
+# because compose cannot express an optional bind mount. Naming a host file
+# that is absent breaks `up` for everyone, and the cert is deliberately
+# untracked (see .gitignore) — each operator downloads their own.
+#
+# ## Prerequisite
+#
+#   Download the project's CA cert and save it as `backend/supabase-ca.crt`.
+#   Steps: docs/supabase-setup.md
+#
+# ## Usage
+#
+#   docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
+#
+# To avoid repeating the flags on every command, set this once in a root
+# `.env` (compose reads that file for its own configuration):
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.supabase.yml
+#
+# Then every documented `docker compose ...` command in README.md and
+# docs/deployment.md works unchanged, cert included. On Windows the path
+# separator is `;` rather than `:`, or set COMPOSE_PATH_SEPARATOR=:.
+#
+# Not needed for: the `local-db` profile, stock Postgres, or any provider
+# whose server cert chains to a publicly-trusted root (RDS with the Amazon
+# bundle already in Node, Neon, Cloud SQL proxy, …).
+# =============================================================================
+
+services:
+  backend:
+    environment:
+      # Read once at boot by buildPgConfig (backend/src/prisma/pg-config.ts)
+      # and pinned as the connection's only trust anchor, with
+      # rejectUnauthorized on. A missing or unreadable file is fatal at
+      # startup, by design — a silent downgrade to an unverified connection
+      # would be worse than a failed boot.
+      DATABASE_CA_CERT_PATH: /etc/mbos/supabase-ca.crt
+      # libpq's standard variable. Prisma 7's schema engine — the process
+      # behind `prisma migrate deploy` in docker-entrypoint.sh — does NOT
+      # read it: migrations succeed against Supabase with this unset, with a
+      # bogus path, and even with `sslmode=verify-full&sslrootcert=<bogus>`,
+      # so it is not verifying the chain. It is set here anyway because it
+      # costs nothing, is honoured by `psql`/`pg_dump`/`pg_restore` inside
+      # the container, and is the right value if a future engine release
+      # adopts libpq semantics. Do not document it as what makes migrate
+      # trust Supabase — it isn't. Tracked as DEBT-040.
+      PGSSLROOTCERT: /etc/mbos/supabase-ca.crt
+    volumes:
+      # Read-only: nothing in the container should ever rewrite a trust
+      # anchor. The host file must exist — that is what this overlay opts
+      # you into.
+      - type: bind
+        source: ./backend/supabase-ca.crt
+        target: /etc/mbos/supabase-ca.crt
+        read_only: true
+
+  # The one-shot `migrate` profile runs the same image against the same
+  # database, so it gets the same wiring. Compose merges these keys into the
+  # base definition; the `profiles: ["migrate"]` there still applies, so this
+  # service stays off unless explicitly requested.
+  migrate:
+    environment:
+      DATABASE_CA_CERT_PATH: /etc/mbos/supabase-ca.crt
+      PGSSLROOTCERT: /etc/mbos/supabase-ca.crt
+    volumes:
+      - type: bind
+        source: ./backend/supabase-ca.crt
+        target: /etc/mbos/supabase-ca.crt
+        read_only: true

@@ -17,11 +17,11 @@
  *   - Logs progress and summary statistics
  *   - Continues on individual failures (logs but doesn't stop)
  */
-import { readFileSync } from 'node:fs';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client';
+import { buildPgConfig } from '../prisma/pg-config';
 import { OpenAICompatibleAIProvider } from './openai-ai.provider';
 import { NoopAIProvider } from './noop-ai.provider';
 
@@ -42,24 +42,11 @@ async function main(): Promise<void> {
     config.get<string>('AI_REEMBED_BATCH_SIZE') ?? DEFAULT_BATCH_SIZE,
   );
 
-  // Initialize Prisma client with pg adapter (same as seed.ts)
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL is not set; cannot run re-embed.');
-  }
-
-  // Mirror the runtime pg config: the same DATABASE_CA_CERT_PATH env var
-  // is honoured here so the script can run against Supabase.
-  const caPath = process.env.DATABASE_CA_CERT_PATH;
-  const pgConfig: { connectionString: string; ssl?: { ca: string } } = {
-    connectionString,
-  };
-  if (caPath && caPath.trim() !== '') {
-    pgConfig.ssl = { ca: readFileSync(caPath, 'utf8') };
-  }
-
+  // Initialize Prisma client with pg adapter — same DATABASE_URL and optional
+  // pinned CA (DATABASE_CA_CERT_PATH) as the Nest runtime and the seed.
+  // See prisma/pg-config.ts.
   const prisma = new PrismaClient({
-    adapter: new PrismaPg(pgConfig),
+    adapter: new PrismaPg(buildPgConfig()),
   });
 
   try {

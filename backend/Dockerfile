@@ -90,6 +90,12 @@ COPY --chown=node:node --from=build /app/src/generated ./src/generated
 COPY --chown=node:node prisma ./prisma
 COPY --chown=node:node package.json ./package.json
 COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
+# The Supabase CA cert (and any other Postgres CA) is mounted at
+# runtime, not COPY-ed at build time — see the `volumes:` block in
+# docker-compose.supabase.yml. Keeping the cert outside the image lets
+# the same image work against stock Postgres (no cert needed) and
+# Supabase (cert mounted) without rebuilds, and keeps a per-deployment
+# trust anchor out of a shared artifact.
 
 USER node
 

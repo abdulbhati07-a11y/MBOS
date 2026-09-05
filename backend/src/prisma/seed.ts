@@ -34,6 +34,7 @@ import {
   flattenRoleMatrix,
 } from '../access-control/access-control.constants';
 import { PrismaClient } from '../generated/prisma/client';
+import { buildPgConfig } from './pg-config';
 
 loadEnv();
 
@@ -47,12 +48,10 @@ const permissionKey = (module: string, action: string): string =>
   `${module}:${action}`;
 
 async function main(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL is not set; cannot seed.');
-  }
+  // Same pg/TLS config as the Nest runtime — DATABASE_URL plus the optional
+  // pinned CA from DATABASE_CA_CERT_PATH. See prisma/pg-config.ts.
   const prisma = new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
+    adapter: new PrismaPg(buildPgConfig()),
   });
 
   try {

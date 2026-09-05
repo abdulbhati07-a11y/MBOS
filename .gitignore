@@ -24,6 +24,15 @@
 .DS_Store
 *.pem
 
+# TLS material. Operator-supplied and environment-specific: each deployment
+# downloads its own database CA cert (docs/supabase-setup.md) rather than
+# inheriting a committed one, which would silently go stale — Supabase Root
+# 2021 CA expires in 2031 and providers do rotate. Private keys must never
+# be committed at all.
+*.crt
+*.cer
+*.key
+
 # debug
 npm-debug.log*
 yarn-debug.log*

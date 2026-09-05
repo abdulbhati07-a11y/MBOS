@@ -61,6 +61,18 @@ docker compose build
 docker compose up -d
 ```
 
+On Supabase, first download the project's CA cert to
+`backend/supabase-ca.crt` and add the overlay that mounts it — the
+connection is refused without a pinned root. Either pass it explicitly:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
+```
+
+…or put `COMPOSE_FILE=docker-compose.yml:docker-compose.supabase.yml` in a
+root `.env` so every command above picks it up. Details:
+[docs/supabase-setup.md](docs/supabase-setup.md).
+
 The backend entrypoint runs `prisma migrate deploy` on every start; the
 first boot applies all migrations to your Supabase project. The
 frontend's `NEXT_PUBLIC_API_URL` is baked in at build time, so change

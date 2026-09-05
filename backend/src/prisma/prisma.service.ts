@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client';
 import { TenantContextService } from '../tenancy/tenant-context.service';
+import { buildPgConfig } from './pg-config';
 import { tenantScopeExtension } from './tenant-scope.extension';
 
 /**
@@ -29,7 +30,8 @@ export type ExtendedPrismaClient = ReturnType<typeof withTenantScope>;
  * Wraps the generated Prisma Client as an injectable Nest provider.
  *
  * Prisma v7 requires a driver adapter for SQL connections (no bundled query
- * engine), so we instantiate `PrismaPg` and hand it to the client. The
+ * engine), so we instantiate `PrismaPg` and hand it the pg config built by
+ * `buildPgConfig` (see pg-config.ts for the TLS / CA-pinning rules). The
  * connection string comes from ConfigService, not a `url` in schema.prisma
  * (deprecated in v7 — see prisma.config.ts).
  *
@@ -52,14 +54,9 @@ export class PrismaService
   readonly db: ExtendedPrismaClient;
 
   constructor(config: ConfigService, tenantContext: TenantContextService) {
-    const connectionString = config.get<string>('DATABASE_URL');
-    if (!connectionString) {
-      throw new Error(
-        'DATABASE_URL is not set. Copy backend/.env.example to backend/.env ' +
-          'and set a PostgreSQL connection string before starting the server.',
-      );
-    }
-    super({ adapter: new PrismaPg({ connectionString }) });
+    super({
+      adapter: new PrismaPg(buildPgConfig((key) => config.get<string>(key))),
+    });
     this.db = withTenantScope(this, tenantContext);
   }
 

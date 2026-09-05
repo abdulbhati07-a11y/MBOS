@@ -61,7 +61,6 @@ describe('OpenAICompatibleAIProvider', () => {
       ],
     }).compile();
 
-    config = module.get<ConfigService>(ConfigService);
     provider = module.get<OpenAICompatibleAIProvider>(
       OpenAICompatibleAIProvider,
     );
