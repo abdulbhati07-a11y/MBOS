@@ -1009,7 +1009,7 @@ The third option is the one that actually restores the lost guarantee; it is del
 
 ---
 
-### DEBT-042 — the decoupled e2e harness has never been executed green; no Docker on the development machine
+### DEBT-042 — the decoupled e2e harness had never been executed green (resolved by the first CI run)
 
 **Where it needs to land:** Section 4.8 / the testing strategy, wherever the verification story is stated.
 
@@ -1022,7 +1022,7 @@ The e2e suite was moved off the live Supabase project and onto an ephemeral pgve
 - the AI provider guard binds the no-op under every test signal even with a key present, and still selects the real provider outside tests (9 unit tests);
 - the unit suite is green in ~18s, down from 324s, with no dangling-worker warning.
 
-What is **not** verified is the thing that matters most: a full e2e run, green, against the container. `docker` is not installed on the development machine (checked: no `docker`/`podman`/`nerdctl` on PATH, no Docker Desktop binaries or service, only a stale `C:\ProgramData\DockerDesktop` directory; WSL2 itself is present). The local PostgreSQL 18 service that *is* running cannot substitute — pgvector is not installed for it (no `vector.control`, no `vector.dll`), and `20260830000000_smart_search_pgvector` opens with `CREATE EXTENSION IF NOT EXISTS vector`.
+At the time this entry was written, what was **not** verified was the thing that mattered most: a full e2e run, green, against the container. `docker` is not installed on the development machine (checked: no `docker`/`podman`/`nerdctl` on PATH, no Docker Desktop binaries or service, only a stale `C:\ProgramData\DockerDesktop` directory; WSL2 itself is present). The local PostgreSQL 18 service that *is* running cannot substitute — pgvector is not installed for it (no `vector.control`, no `vector.dll`), and `20260830000000_smart_search_pgvector` opens with `CREATE EXTENSION IF NOT EXISTS vector`.
 
 Pointed at the container URL with nothing listening, the harness behaves correctly up to that point: the guard passes (`[e2e] database host verified as throwaway: 127.0.0.1:55432`), the no-op provider is announced, and every suite then fails identically with `Can't reach database server at 127.0.0.1:55432`. So the wiring is right and the only missing input is a running container.
 
@@ -1035,7 +1035,46 @@ Until one of those happens, treat "the e2e suite passes" as an untested claim. I
 
 **Source:** `docker-compose.test.yml`, `backend/test/run-e2e.mjs`, `backend/test/jest-e2e.json`, `backend/test/guard-database.ts`, `.github/workflows/ci.yml`.
 
-**Status:** Open — blocked on a container runtime or a first CI run, not on code. Nothing further can be verified locally.
+**Resolved by:** the repository's first CI run — [run 33978106137](https://github.com/abdulbhati07-a11y/MBOS/actions/runs/33978106137) on PR #1, all three jobs green. The `Backend E2E` job stood up `pgvector/pgvector:pg17` as a service container, applied the full migration history including `CREATE EXTENSION IF NOT EXISTS vector`, seeded, and ran **14 suites / 338 tests, all passing, in 43.2s**. The unit job ran 16 suites / 150 tests in 10.7s. Both guards logged their verdicts before any suite executed:
+
+```
+[e2e] database host verified as throwaway: localhost:5432
+[e2e] AI provider: forced no-op (no external API calls)
+```
+
+The negative evidence is what matters most, taken from the job log: **zero** occurrences of `supabase`, `api.openai.com`, `OpenAICompatibleAIProvider`, `no credits`, or `generateEmbedding failed`, and zero "worker process has failed to exit gracefully" warnings. The real provider class was never even constructed, despite the job deliberately setting a sentinel `AI_API_KEY` — so the guard is proven under live conditions, not just in unit tests.
+
+The `maxWorkers: 1` serial path noted above is also now exercised: all 14 suites ran serially against one shared database with no marker collisions.
+
+**Status:** Resolved — the harness is verified green in CI on every PR. Local execution still needs a container runtime (no Docker on the development machine), so `npm run test:e2e:local` remains the unexercised path; that is a developer-convenience gap, not a verification gap, since CI now gates every PR.
+
+---
+
+### DEBT-043 — a Supabase GitHub integration is installed on a public repository and points at the production-track project
+
+**Where it needs to land:** Section 4.8 (deployment) and Section 9 (security), alongside the DEBT-040 trust-boundary discussion.
+
+**What needs to be written:** that a third-party GitHub App with access to the live Supabase project runs on every pull request, and what it is and is not permitted to do.
+
+PR #1's checks include a **`Supabase Preview`** status, reported as `SKIPPED`, linking to `https://supabase.com/dashboard/project/cthqhofwjouczxbembim/settings/integrations` — the same project `backend/.env`'s `DATABASE_URL` points at. Nobody in this workstream installed it; it was already connected.
+
+It skipped because the repository has no `supabase/` directory and no `config.toml`, so the integration found no declared migrations to apply. That is the only reason. The integration is live, not dormant: if a `supabase/migrations/` tree ever appears — which is a plausible future step, since the Supabase CLI is the normal way to manage that project — the App would begin acting on the production-track project automatically, per pull request, from a **public** repository where anyone can open a PR.
+
+This is a different exposure from DEBT-040. That one is about a connection this codebase makes; this one is about a connection something else makes on this codebase's behalf, on a trigger the repository does not control.
+
+**What needs deciding:**
+
+| Option | Effect |
+| --- | --- |
+| Disconnect the integration | Removes the trigger entirely. Costs nothing today, because it is doing nothing today. |
+| Keep it, and make the repository private | Removes "anyone can open a PR" as the trigger surface. |
+| Keep it, and pin its branch/directory scope in the Supabase dashboard | Narrowest change, but leaves a live App on a public repo. |
+
+Related: the repository being public is itself worth an explicit decision rather than a default — `.env.production.example` documents the exact pooler host and project-ref format, and a public repo means every future push is one `.gitignore` gap away from a permanent disclosure. A history scan run before pushing found no committed credential (no `.env` ever tracked, no cert/key files, no OpenAI key, no 64-hex JWT secrets; the only `sk-` token in history is the deliberate test constant in `ai.module.spec.ts`), so nothing is leaked today — but that scan was a targeted regex pass, not gitleaks, and it says nothing about tomorrow.
+
+**Source:** `gh pr checks 1`, the absence of `supabase/` and `config.toml` in the tree, `gh repo view` reporting `visibility=PUBLIC`.
+
+**Status:** Open — needs an owner decision, not engineering. Not currently doing anything, which is exactly why it is easy to fix now and awkward to discover later.
 
 ---
 
