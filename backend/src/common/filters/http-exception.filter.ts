@@ -31,6 +31,11 @@ const CODE_BY_STATUS: Readonly<Record<number, string>> = {
   [HttpStatus.CONFLICT]: 'CONFLICT',
   [HttpStatus.UNPROCESSABLE_ENTITY]: 'VALIDATION_ERROR',
   [HttpStatus.TOO_MANY_REQUESTS]: 'RATE_LIMIT_EXCEEDED',
+  // 503 is what the readiness probe raises when the database is unreachable
+  // (AppService.getReadiness). Without an entry here it fell through to the
+  // generic 'ERROR', which told a monitoring system nothing about *why* the
+  // instance was unready.
+  [HttpStatus.SERVICE_UNAVAILABLE]: 'SERVICE_UNAVAILABLE',
 };
 
 /**

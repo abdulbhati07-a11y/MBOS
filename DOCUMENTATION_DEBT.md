@@ -236,7 +236,7 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 **Source:** Section 6.1 rate-limiting subsection. Section 2 NFR list. `backend/src/rate-limit/rate-limit.config.ts`, `backend/src/main.ts` (`resolveTrustProxy`), `backend/.env.example`. Thresholds and proxy-trust posture resolved during the DEBT-013 close.
 
-**Status:** Resolved — thresholds and proxy-trust setting decided and implemented; interim values replaced (not left alongside). Sections 6.1 and 2-NFR still need the prose updated to match these numbers, tracked as ordinary doc-sync, not an open decision.
+**Status:** Resolved — thresholds and proxy-trust setting decided, implemented, and now written into `docs/section-6-api-design.md` §6.1 (the three ceilings, burst-is-additive, the env override per threshold, and proxy trust as part of the same decision). Interim values were replaced rather than left alongside. §6.12 lists this as resolved rather than deferred. Section 2's NFR list still needs the same numbers — ordinary doc-sync, not an open decision.
 
 ---
 
@@ -333,7 +333,13 @@ This resolves each of the three problems above:
 
 **Source:** `docs/section-6-api-design.md` §6.2 lines 107–160 and §6.1 lines 82–104. `backend/src/common/guards/api-access.guard.ts`, `backend/src/access-control/access-control.decorators.ts`, `backend/src/rate-limit/rate-limit.guard.ts`. Identified while implementing chain steps 2, 5 and 6.
 
-**Status:** Open — both behaviours implemented and commented in code; Section 6.2 needs amending so the contract is documented rather than inferred from the implementation.
+**Resolved by:** `docs/section-6-api-design.md` §6.2, which gained three subsections and two amended chain steps:
+
+- the chain diagram now shows `2a. Rate Limiter — per IP (pre-auth)` and `2b. Rate Limiter — per tenant (post-auth)` in their real positions, with "Why the rate limiter is split" explaining that §6.1's per-tenant limit and a single pre-auth step are not simultaneously satisfiable because `tenantId` does not exist until step 3 has validated the JWT;
+- steps 5 and 6 now state the fail-closed default explicitly, and "The default for a route that declares no module or action" gives the reasoning (fail-open turns a forgotten decorator into an unguarded endpoint; fail-closed turns it into a test failure) plus a table of `@NoModuleRequired()`'s two current users — `GET /auth/me`, where a permission gate would be circular, and `GET /search`, which filters per-module inside the handler and returns an empty section rather than a 403;
+- "The chain's order is guaranteed, not incidental" records that steps 2–6 are sequenced inside one guard (`backend/src/common/guards/api-access.guard.ts`) rather than four independently-registered globals relying on provider-resolution order.
+
+**Status:** Resolved — both behaviours documented in §6.2 rather than inferable only from the implementation.
 
 ---
 
