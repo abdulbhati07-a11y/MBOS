@@ -57,26 +57,42 @@ The short version:
 ```bash
 cp .env.production.example .env.production
 # fill in secrets, Supabase URL, CORS_ORIGIN, NEXT_PUBLIC_API_URL
+./scripts/deploy.sh
+```
+
+`scripts/deploy.sh` is the whole release: it builds the images, applies
+migrations **once** in a throwaway container, and only then starts the
+services. The equivalent by hand is:
+
+```bash
 docker compose build
+docker compose --profile migrate run --rm migrate   # required, not optional
 docker compose up -d
 ```
 
 On Supabase, first download the project's CA cert to
 `backend/supabase-ca.crt` and add the overlay that mounts it — the
-connection is refused without a pinned root. Either pass it explicitly:
+connection is refused without a pinned root. Put
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
+COMPOSE_FILE=docker-compose.yml:docker-compose.supabase.yml
 ```
 
-…or put `COMPOSE_FILE=docker-compose.yml:docker-compose.supabase.yml` in a
-root `.env` so every command above picks it up. Details:
+in a root `.env` (compose reads that file for its own configuration) so
+every `docker compose` invocation — including the ones inside
+`scripts/deploy.sh` — picks the overlay up. Passing `-f docker-compose.yml
+-f docker-compose.supabase.yml` by hand works too, but then you must pass
+it to the migrate step as well as `up`. Details:
 [docs/supabase-setup.md](docs/supabase-setup.md).
 
-The backend entrypoint runs `prisma migrate deploy` on every start; the
-first boot applies all migrations to your Supabase project. The
-frontend's `NEXT_PUBLIC_API_URL` is baked in at build time, so change
-it in `.env.production` **before** `docker compose build`.
+The backend container does **not** migrate on boot — the `migrate` step
+above is the only thing that applies migrations, so it has to run before
+`up` on every release that adds one. That is deliberate: Prisma's schema
+engine does not verify the database's certificate chain (DEBT-040), and
+migrating from every container start of every replica both widened that
+exposure and had N replicas racing on DDL. The frontend's
+`NEXT_PUBLIC_API_URL` is baked in at build time, so change it in
+`.env.production` **before** the build.
 
 ---
 

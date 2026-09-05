@@ -45,14 +45,15 @@ services:
       # would be worse than a failed boot.
       DATABASE_CA_CERT_PATH: /etc/mbos/supabase-ca.crt
       # libpq's standard variable. Prisma 7's schema engine — the process
-      # behind `prisma migrate deploy` in docker-entrypoint.sh — does NOT
-      # read it: migrations succeed against Supabase with this unset, with a
-      # bogus path, and even with `sslmode=verify-full&sslrootcert=<bogus>`,
-      # so it is not verifying the chain. It is set here anyway because it
-      # costs nothing, is honoured by `psql`/`pg_dump`/`pg_restore` inside
-      # the container, and is the right value if a future engine release
-      # adopts libpq semantics. Do not document it as what makes migrate
-      # trust Supabase — it isn't. Tracked as DEBT-040.
+      # behind the one-shot `migrate` service below — does NOT read it:
+      # migrations succeed against Supabase with this unset, with a bogus
+      # path, and even with `sslmode=verify-full&sslrootcert=<bogus>`, so it
+      # is not verifying the chain. It is set here anyway because it costs
+      # nothing, is honoured by `psql`/`pg_dump`/`pg_restore` inside the
+      # container, and is the right value if a future engine release adopts
+      # libpq semantics (do not count on it — prisma/prisma#10833 is closed
+      # as not planned). Do not document it as what makes migrate trust
+      # Supabase — it isn't. Tracked as DEBT-040.
       PGSSLROOTCERT: /etc/mbos/supabase-ca.crt
     volumes:
       # Read-only: nothing in the container should ever rewrite a trust

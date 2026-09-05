@@ -62,8 +62,10 @@ connection would be worse than a failed boot.
 `PGSSLROOTCERT` is libpq's standard variable, honoured by `psql`,
 `pg_dump` and friends. Prisma 7's schema engine does **not** read it, so
 `prisma migrate deploy` connects over TLS without verifying the chain
-(DEBT-040). Set it anyway — it is correct for the CLI tools and is the
-right value if a future engine release adopts libpq semantics.
+(DEBT-040 — upstream limitation, no connection-string fix). Set it anyway:
+it is correct for the CLI tools in the same container. Migrations run once
+per deploy from the one-shot `migrate` service, never from a container
+boot, which is what keeps that unverified connection to a single event.
 
 Do **not** add `?sslmode=...` to `DATABASE_URL`. `pg-connection-string`
 turns it into an `ssl` object that replaces the pinned CA, which puts the

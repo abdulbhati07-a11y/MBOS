@@ -8,7 +8,7 @@
 #                 then `nest build` (writes dist/)
 #   3. prod-deps — re-install prod-only deps into a fresh layer
 #   4. runtime  — slim image: prod node_modules + dist + generated prisma client
-#                 + migrations + the migrate-then-boot entrypoint
+#                 + migrations + the API-only entrypoint
 #
 # Why a multi-stage layout and not `npm ci --omit=dev` in a single stage:
 # `nest build` and `prisma generate` need typescript, the nest CLI, and the
@@ -16,11 +16,14 @@
 # after the build is a non-starter because `npm prune` doesn't shrink the
 # layer the build wrote — the layer is already sealed.
 #
-# The migrate-deploy step runs on every container start, but Prisma records
-# applied migrations in `_prisma_migrations`, so it is a no-op after the
-# first boot. If the database is unreachable, the entrypoint exits and Docker
-# restarts the container until the DB answers — that is the desired
-# behaviour: the backend should never start ahead of its data store.
+# THIS IMAGE DOES NOT MIGRATE ON BOOT. The `prisma/migrations` tree is
+# shipped so the same image can be run as the one-shot migration job
+# (`docker compose --profile migrate run --rm migrate`, which overrides the
+# entrypoint), but a normal container start runs the API only. Migrations
+# are a separate, explicit deploy step that runs once per release before new
+# containers start — see docs/deployment.md §3.1 and DEBT-040 in
+# DOCUMENTATION_DEBT.md for why (unverified TLS on the schema engine's
+# connection, plus the N-replicas-race-on-boot problem).
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -101,17 +104,17 @@ USER node
 
 EXPOSE 3001
 
-# `migrate deploy` is the right command for production: it applies pending
-# migrations without prompting and refuses to run if the migration history
-# has drifted. The compose file expects the backend to be healthy only
-# after this step, and that healthcheck (below) pings the actual API.
+# The entrypoint starts the API and only the API. It deliberately does NOT
+# run `prisma migrate deploy` — see the header and DEBT-040. The compose
+# `migrate` service overrides this entrypoint to run the migration one-shot
+# from the same image, which is why prisma/migrations is COPY-ed above.
 ENTRYPOINT ["sh", "./docker-entrypoint.sh"]
 
 # Readiness, not liveness: the orchestrator (compose healthcheck, or a
 # load balancer) gates traffic on this. A liveness check that touches the
 # DB would restart the container every time Postgres hiccupped, which is
 # not what you want — the connection pool survives a brief DB blip. Use a
-# short interval so a green container does not advertise readiness during
-# a long initial migration.
+# short interval so a green container does not advertise readiness before
+# the Nest app has finished wiring its modules.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3001/api/v1/health/ready || exit 1

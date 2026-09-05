@@ -2,7 +2,8 @@
 
 > **Document status:** Runbook. Reflects the Docker packaging in the repo
 > root (`Dockerfile`, `docker-compose.yml`, `.env.production.example`,
-> `backend/Dockerfile`, `backend/docker-entrypoint.sh`). Cross-references
+> `scripts/deploy.sh`, `backend/Dockerfile`,
+> `backend/docker-entrypoint.sh`). Cross-references
 > Section 4.8 of the spec; supersedes any in-line "deployment" notes in
 > earlier sections.
 
@@ -133,19 +134,27 @@ Supabase's cert chains to a private root Node does not ship, so the root
 has to be pinned. Download it once
 (*Project Settings → Database → Connection string → SSL Certificate →
 Download*), save it as `backend/supabase-ca.crt` — full walkthrough in
-[supabase-setup.md](./supabase-setup.md) — then add the overlay that
-mounts it to every compose command:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
-```
-
-Rather than repeat the flags, set this once in a root `.env` (compose
-reads that file for its own configuration) and every command in this
-document works unchanged:
+[supabase-setup.md](./supabase-setup.md) — then make the overlay that
+mounts it apply to **every** compose command, including the migration
+one-shot. Set this once in a root `.env` (compose reads that file for its
+own configuration):
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.supabase.yml
+```
+
+Every command in this document — and inside `scripts/deploy.sh` — then
+works unchanged, cert included. On Windows the path separator is `;`
+rather than `:`, or set `COMPOSE_PATH_SEPARATOR=:`.
+
+Passing the files by hand works too, but you must pass them to the
+migration step as well as to `up`, which is why `COMPOSE_FILE` is the
+recommended route:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml \
+  --profile migrate run --rm migrate
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
 ```
 
 The cert is not in the base compose file because compose has no optional
@@ -157,36 +166,74 @@ stale.
 Skip this section entirely for stock Postgres, the `local-db` profile, or
 any provider with a publicly-trusted cert.
 
-### 3.1 Build and bring up
+### 3.1 Build, migrate, start
+
+Migrations are **their own step**, and they run **before** the containers
+that serve traffic. The backend image does not migrate on boot — see
+§3.2 for why. `scripts/deploy.sh` encodes the whole sequence and aborts
+before starting anything if the migration fails:
 
 ```bash
-# Build images. The frontend build bakes NEXT_PUBLIC_API_URL into the
-# bundle — make sure .env.production has the right value before this.
+./scripts/deploy.sh
+```
+
+Equivalently, by hand:
+
+```bash
+# 1. Build images. The frontend build bakes NEXT_PUBLIC_API_URL into the
+#    bundle — make sure .env.production has the right value before this.
 docker compose build
 
-# Bring the stack up. The backend's entrypoint runs `prisma migrate deploy`
-# on every start; the first start applies all migrations to the
-# (already-existing) Supabase project.
+# 2. Apply migrations, once, in a throwaway container that exits when done.
+#    REQUIRED on any release that adds a migration. Not optional.
+docker compose --profile migrate run --rm migrate
+
+# 3. Start the app. Only do this after step 2 exited 0.
 docker compose up -d
 
-# Watch the backend boot — the migrate output is the first thing logged.
+# Watch the backend boot.
 docker compose logs -f backend
 ```
 
-A successful first boot ends with `[entrypoint] starting API…` and the
+A successful boot ends with `[entrypoint] starting API…` and the
 `backend` service reporting `healthy` in `docker compose ps`.
 
-### 3.2 One-shot migration (alternative)
+`SKIP_BUILD=1 ./scripts/deploy.sh` reuses the images already built, for a
+redeploy that only changes environment.
 
-If you want to apply migrations without restarting the API, use the
-`migrate` profile:
+To check what a migration step *would* do before running it — same image,
+same env, read-only:
 
 ```bash
-docker compose --profile migrate run --rm migrate
+docker compose --profile migrate run --rm --entrypoint sh migrate \
+  -c "npx prisma migrate status --schema=prisma/schema.prisma"
 ```
 
-This runs `prisma migrate deploy` against the database pointed at by
-`DATABASE_URL` and exits. The backend service is not started.
+### 3.2 Why migrations are not part of container start
+
+They used to be, via `backend/docker-entrypoint.sh`. Two problems made
+that the wrong shape:
+
+- **Unverified TLS on the migration connection (DEBT-040).** Prisma 7's
+  schema engine connects to Postgres over TLS but does not verify the
+  server's certificate chain — no combination of `sslmode`,
+  `sslrootcert`, `sslcert` or `PGSSLROOTCERT` changes that, and the
+  `prisma.config.ts` `adapter` hook that would have fixed it was removed
+  in v7. Running it from every container start of every replica left that
+  unverified connection happening continuously. Running it once per
+  deploy narrows the window to a single event. The application's own
+  runtime pool is unaffected: it pins the CA and verifies (see §7).
+- **N replicas racing on DDL.** With migrate-at-boot, scaling the backend
+  to *n* containers meant *n* processes attempting migrations at once.
+  Prisma's advisory lock serialises them, but the correct fix is for no
+  replica to touch the schema at all.
+
+The consequence to be aware of: nothing now auto-applies a pending
+migration. If you roll out an image whose code expects a column that was
+never migrated, the app will fail against the old schema and readiness
+will stay red. That is the intended loud failure, but it does mean the
+migrate step is not skippable. Use `scripts/deploy.sh` rather than a bare
+`docker compose up -d`.
 
 ### 3.3 Local development (no Supabase)
 
@@ -353,12 +400,12 @@ progress without running a query.
 - **Restart** — `docker compose restart backend` for config changes that
   don't require a rebuild (rate limits, CORS). For env changes, restart
   the affected service.
-- **Update** — pull new code, `docker compose build`, `docker compose
-  up -d`. Compose rolls the backend first; its healthcheck holds
-  traffic away while the new container boots. Migrations are part of
-  the backend's entrypoint, so a deploy with a new migration just
-  works — old containers finish in-flight requests, the new one runs
-  `migrate deploy`, then takes traffic.
+- **Update** — pull new code, then `./scripts/deploy.sh` (build →
+  migrate once → up). Compose rolls the backend after the migration has
+  already been applied; its healthcheck holds traffic away while the new
+  container boots, and old containers finish in-flight requests. Do not
+  use a bare `docker compose up -d` for a release that adds a migration:
+  nothing applies it at container start any more (§3.2).
 - **Backup** — Supabase provides automated daily backups on paid
   plans; for free-tier projects, configure
   [`supabase db dump`](https://supabase.com/docs/guides/cli/local-development#database-migrations)
@@ -378,12 +425,19 @@ Check the boot log (`docker compose logs backend`). Common causes:
   validators in `env-validation.ts` caught a missing/placeholder
   secret. Fill in the real values.
 - `P1001: Can't reach database server` — `DATABASE_URL` points
-  somewhere unreachable. For Supabase, the most common cause is
-  forgetting `?sslmode=require` or the password containing a URL-
-  reserved character that needs percent-encoding.
-- `Prisma migration error` — the migration history has drifted from
-  the schema. `docker compose exec backend npx prisma migrate status`
-  reports the diff. Resolve locally and redeploy.
+  somewhere unreachable. For Supabase, the most common cause is a
+  password containing a URL-reserved character that needs
+  percent-encoding, or the wrong host/port for the pooler you picked.
+  Note that `?sslmode=require` is **not** the fix — it is rejected at
+  startup (see below); Supabase mandates TLS server-side anyway.
+- Errors about a missing column or table — the migration step was
+  skipped. The backend no longer migrates on boot (§3.2). Run
+  `docker compose --profile migrate run --rm migrate`, or redeploy with
+  `./scripts/deploy.sh`.
+- `P3009` / drifted migration history from the **migrate** container — run
+  `docker compose --profile migrate run --rm --entrypoint sh migrate -c
+  "npx prisma migrate status --schema=prisma/schema.prisma"` to see the
+  diff. Resolve locally and redeploy.
 
 ### Frontend returns 502 Bad Gateway
 
@@ -469,7 +523,18 @@ server chain against your pinned root. Prisma 7's schema engine ignores
 `PGSSLROOTCERT` and the URL's `sslrootcert` — migrations succeed with the
 variable unset, with a bogus path, and even with
 `sslmode=verify-full&sslrootcert=<bogus>`. The application's own runtime
-pool (`PrismaService`) *does* verify. Tracked as DEBT-040.
+pool (`PrismaService`) *does* verify, so this is scoped exclusively to the
+migration tool's connection.
+
+This is a known upstream limitation with no connection-string fix
+(prisma/prisma#10833, closed as not planned). It is **partially
+mitigated**: since migrations were moved out of container start (§3.2),
+the unverified connection happens once per deploy from the host running
+`scripts/deploy.sh`, rather than continuously from every replica's boot.
+The residual risk — an active MITM on that one deploy-time connection
+could capture the database credentials — is accepted and recorded in
+DEBT-040; full closure via a verifying local tunnel is scheduled for the
+production-hardening phase.
 
 ### Backend healthcheck flapping (passes then fails then passes)
 

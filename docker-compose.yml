@@ -5,7 +5,10 @@
 #   - `local-db` brings up a pgvector-enabled Postgres for a fully-local
 #     stack; bring it up with `docker compose --profile local-db up`.
 #     Production never uses this — the database is Supabase.
-#   - `migrate` runs `prisma migrate deploy` as a one-shot and exits.
+#   - `migrate` runs `prisma migrate deploy` as a one-shot and exits. This
+#     is the ONLY thing that applies migrations: the backend container does
+#     not migrate on boot. It is a required step of every release, not an
+#     optional convenience — see docs/deployment.md §3.1.
 #
 # By default `docker compose up` brings up the app talking to whatever
 # `DATABASE_URL` is in `.env.production`. The committed
@@ -39,13 +42,15 @@ services:
   # `DATABASE_URL=postgresql://...@db:5432/...` in `.env.production`.
   #
   # The default `DATABASE_URL` in `.env.production.example` points at
-  # Supabase. Supabase requires `?sslmode=require` on the direct
-  # connection and `?pgbouncer=true&connection_limit=1` when going
-  # through the transaction pooler (the URL the backend should use in
-  # serverless / single-connection environments). The image used here is
-  # `pgvector/pgvector:pg17` because the smart_search migration needs the
-  # vector extension; Supabase already has it on — see DEBT-035 for the
-  # column-size coupling and the backfill story.
+  # Supabase. Supabase mandates TLS server-side — it refuses a plaintext
+  # session outright — so `?sslmode=require` is not needed and is in fact
+  # REJECTED at startup by `buildPgConfig`: pg-connection-string turns it
+  # into an `ssl` object that replaces the pinned CA. Add
+  # `?pgbouncer=true&connection_limit=1` only when going through the
+  # transaction pooler (serverless / single-connection environments). The
+  # image used here is `pgvector/pgvector:pg17` because the smart_search
+  # migration needs the vector extension; Supabase already has it on — see
+  # DEBT-035 for the column-size coupling and the backfill story.
   # ---------------------------------------------------------------------------
   db:
     # `pgvector/pgvector:pg17` is the upstream pgvector project image:
@@ -176,16 +181,26 @@ services:
       start_period: 20s
 
   # ---------------------------------------------------------------------------
-  # One-shot migration runner. `migrate deploy` is run on every backend
-  # start (via the entrypoint script), but the profile makes the migration
-  # explicit for an operator who wants to validate the schema before
-  # bringing the API up. Use as:
+  # One-shot migration runner — the ONLY thing in this stack that applies
+  # migrations. The backend container does not migrate on boot (see
+  # backend/docker-entrypoint.sh and DEBT-040). Run this once per release,
+  # BEFORE bringing the new containers up:
   #
   #   docker compose --profile migrate run --rm migrate
+  #   docker compose up -d
   #
-  # This starts the backend image, runs `prisma migrate deploy` against
-  # the database, and exits. The `--rm` removes the throwaway container
-  # when it exits. The backend service is not started in this mode.
+  # `scripts/deploy.sh` runs that sequence for you and refuses to start the
+  # app if the migration step fails.
+  #
+  # It starts the backend image, runs `prisma migrate deploy` against the
+  # database, and exits; `--rm` removes the throwaway container. The backend
+  # and frontend services are not started in this mode.
+  #
+  # Exactly one container runs here regardless of how many backend replicas
+  # follow, so there is no concurrent-DDL race. Prisma additionally takes a
+  # Postgres advisory lock for the duration and records applied migrations in
+  # `_prisma_migrations`, so a second invocation is a no-op rather than a
+  # conflict.
   #
   # As with `backend`, no CA cert is wired in here — see the overlay
   # `docker-compose.supabase.yml`, which extends this service too.
@@ -198,12 +213,14 @@ services:
     image: mbos-backend:latest
     env_file:
       - .env.production
-    # Override the default entrypoint so only the migrate command runs;
-    # the API is never started in this mode. `migrate deploy` exits 0 on
-    # success; `restart: no` is what makes this a one-shot — the
-    # container exits, --rm removes it, no restart loop. DATABASE_URL
-    # comes from env_file (Supabase in production, the local-db
-    # service when run with both profiles).
+    # Replace the image's entrypoint entirely so only the migrate command
+    # runs; the API is never started in this mode. `entrypoint:` (rather
+    # than `command:`) is deliberate — it overrides argv outright and stays
+    # correct no matter what the Dockerfile's ENTRYPOINT/CMD becomes.
+    # `migrate deploy` exits 0 on success; `restart: "no"` is what makes
+    # this a one-shot — the container exits, --rm removes it, no restart
+    # loop. DATABASE_URL comes from env_file (Supabase in production, the
+    # local-db service when run with both profiles).
     entrypoint: ["npx", "prisma", "migrate", "deploy", "--schema=prisma/schema.prisma"]
     restart: "no"
 

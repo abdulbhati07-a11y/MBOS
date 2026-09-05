@@ -912,7 +912,7 @@ The RRF math is right, but the implementation has one quirk worth recording so t
 
 Supabase serves a cert chained to a private root (`Supabase Root 2021 CA`) that Node does not ship. The **application's** pool pins it correctly: `buildPgConfig` (`backend/src/prisma/pg-config.ts`) reads `DATABASE_CA_CERT_PATH` and passes `ssl: { ca, rejectUnauthorized: true }` to `PrismaPg`, so every query the API issues runs over a connection whose chain was verified against that root. Substituting a wrong CA fails the handshake with `SELF_SIGNED_CERT_IN_CHAIN`, which is the proof that verification is actually on rather than nominally configured.
 
-The **schema engine's** connection — the separate process behind `prisma migrate deploy`, run by `backend/docker-entrypoint.sh` on every container start — does not. Measured against the live project, `prisma migrate status` succeeds in all of these cases:
+The **schema engine's** connection — the separate native process (`@prisma/engines/schema-engine-*`) behind `prisma migrate deploy` — does not. Measured against the live project, `prisma migrate status` (read-only) behaves as follows:
 
 | Configuration | Expected if verifying | Actual |
 | --- | --- | --- |
@@ -920,18 +920,92 @@ The **schema engine's** connection — the separate process behind `prisma migra
 | `PGSSLROOTCERT` unset | fail (untrusted root) | **pass** |
 | `PGSSLROOTCERT` = a bogus PEM | fail | **pass** |
 | URL `?sslmode=verify-full&sslrootcert=<bogus>` | fail | **pass** |
+| URL `?sslmode=require&sslcert=<real root>` | pass | pass |
+| URL `?sslmode=require&sslcert=<malformed PEM>` | fail (parse) | fail — `P1011 … ASN1 unexpected end of data` |
+| URL `?sslmode=require&sslcert=<valid but WRONG public root>` | fail (untrusted) | **pass** |
+| URL `?sslmode=verify-full&sslcert=<valid but WRONG root>` | fail | **pass** |
+| URL `?sslmode=disable` | — | refused **by Supabase**: `SSL connection is required for user: postgres` |
 
-So the engine reads neither libpq's `PGSSLROOTCERT` nor the URL's `sslrootcert`, and does not verify the chain it is given. The connection is still encrypted — Supabase refuses plaintext outright (`XX000 SSL connection is required for user: postgres`) — so this is an authentication-of-the-server gap, not a confidentiality one: migrations are exposed to an active MITM that can present any cert, not to passive interception.
+The last four rows are the informative ones and they were not in the first pass of this measurement. `sslcert` **is** read — a malformed PEM fails with a parse error, which proves the engine opens and decodes the file — but it is **not used as a trust anchor**: a genuine, correctly-parsing public root CA that has nothing to do with Supabase connects fine. The control for that row is the same file handed to `node-pg` on the application's own path, which correctly refuses it with `self-signed certificate in certificate chain`. So "wrong CA" is detectable; the schema engine simply does not check.
 
-The blast radius is small but not nil. The window is the moments around container start; the credential on that connection is the same `DATABASE_URL` password the app uses, so a successful MITM captures it. Nothing in the repo currently claims otherwise — the docs were corrected in the same change that raised this — but the temptation to read the `PGSSLROOTCERT` in `docker-compose.supabase.yml` as the thing that makes migrate safe is exactly why this needs writing down.
+The connection is still encrypted — `sslmode=disable` is refused by the server, so there is no plaintext path — making this an **authentication-of-the-server** gap, not a confidentiality one: migrations are exposed to an *active* MITM able to present any certificate, not to passive interception.
 
-**What the fix requires:** decide and document the intended posture. Options, cheapest first: (a) accept it, state it explicitly in Section 9, and rely on the network path being trusted; (b) stop running `migrate deploy` from the entrypoint and apply migrations from a controlled host or CI step over a connection whose TLS you do control; (c) route the engine through a local proxy (`stunnel`, `pgbouncer`, the Supabase connection pooler's own verified endpoint) that terminates a verified session. Re-test the table above on each Prisma upgrade — if a release adopts libpq semantics, the `PGSSLROOTCERT` already set in the overlay makes this resolve itself, and the docs should stop hedging.
+**This is an upstream limitation, not a misconfiguration here.** Four independent lines of evidence:
 
-**Interim state:** `PGSSLROOTCERT` is set in `docker-compose.supabase.yml` and `backend/.env` because it is correct for `psql`/`pg_dump` in the same container and is forward-insurance; every doc that mentions it now says plainly that Prisma does not honour it.
+1. **Parameter surface of the shipped engine.** The only `ssl*` URL keys present as strings in the 7.9.1 schema-engine binary are `sslcert`, `sslidentity`, `sslmode` (alongside the MongoDB spelling `tlsCAFile`, all three reached from `schema-engine/core/src/state.rs`). There is no `sslrootcert` string at all. `sslaccept` — the `strict` / `accept_invalid_certs` switch commonly cited as the fix, e.g. in [prisma/prisma discussion #13462](https://github.com/prisma/prisma/discussions/13462) — appears **only** in Quaint's MySQL URL parser (`quaint/src/connector/mysql/url.rs:47`, "Unsupported SSL accept mode, defaulting to `accept_invalid_certs`"). It is not wired to the PostgreSQL connector, so the widely-copied Azure answer does not transfer. `verify-ca` / `verify-full` occur once each, inside an upstream `rust-postgres` message about `sslnegotiation=direct` — not in Prisma's own mode handling, which per the docs recognises only `prefer`, `require`, `disable`.
+2. **Prisma's own tracking issue.** [prisma/prisma#10833 — "Support `sslmode=verify-full` and `sslrootcert`"](https://github.com/prisma/prisma/issues/10833), filed 22 Dec 2021 by a Prisma team member who noted the engine does "not understand and adhere to" those parameters, is **closed as not planned**. No workaround, no timeline.
+3. **Prisma 7 removed the escape hatch that would have fixed it.** Up to v6.19, `prisma.config.ts` accepted `adapter: () => Promise<SqlMigrationAwareDriverAdapterFactory>` — "a Prisma driver adapter instance which is used by the Prisma CLI to run migrations". Handing that a `PrismaPg` built by `buildPgConfig()` would have given migrations the *same verified* TLS as the runtime pool. The [config reference](https://www.prisma.io/docs/orm/reference/prisma-config-reference) records `adapter` as **removed in v7**; migrate now takes its connection from `datasource.url` only. The installed `@prisma/config` 7.9.1 confirms it: `Datasource = { url?: string; shadowDatabaseUrl?: string }` and nothing else. For this specific property, v7 is a regression from v6.
+4. **Docs never claimed it.** Prisma's [PostgreSQL connector page](https://www.prisma.io/docs/orm/overview/databases/postgresql) documents `sslmode` (`prefer`/`require`/`disable`), `sslcert` ("Path to server certificate") and `sslidentity`, and says nothing anywhere about chain or hostname verification. Related: [#8697](https://github.com/prisma/prisma/issues/8697) reports `sslmode=require` alone not even forcing encryption.
 
-**Source:** probed against the live Supabase project while finishing the CA-pinning change; `backend/docker-entrypoint.sh` (the `migrate deploy` call), `docker-compose.supabase.yml`, `backend/src/prisma/pg-config.ts`.
+Conclusion: **no combination of connection-string parameters or environment variables makes the Prisma 7 schema engine authenticate the PostgreSQL server.** Any mitigation has to sit outside Prisma.
 
-**Status:** Open — behaviour confirmed by measurement, posture undecided, docs no longer misstate it.
+The blast radius is small but not nil. The credential on that connection is the same `DATABASE_URL` password the app uses, so a successful MITM captures it. Nothing in the repo currently claims otherwise — the docs were corrected in the same change that raised this — but the temptation to read the `PGSSLROOTCERT` in `docker-compose.supabase.yml` as the thing that makes migrate safe is exactly why this needs writing down.
+
+**What the fix requires:** a posture decision, because Prisma offers no lever. The three viable options, with what each actually buys:
+
+| Option | Closes the gap? | Cost |
+| --- | --- | --- |
+| **(a) Accept, and rely on the network path.** State the residual risk in Section 9. Migrations keep running from the entrypoint. | No — reduces nothing | Zero code |
+| **(b) Move `migrate deploy` out of container start** into one gated deploy step (CI job or an operator-run command) and drop it from `docker-entrypoint.sh`. | Partially. Narrows exposure from every container start of every replica to one run per deploy from one known host — but a CI runner still reaches Supabase over the public internet, unverified. | Small; also fixes the unrelated N-replicas-race-on-boot problem |
+| **(c) Front the engine with a verifying tunnel.** A local TLS terminator that does full chain + hostname verification against the pinned root, with the engine connecting to `127.0.0.1`. Note Postgres TLS is a STARTTLS-style upgrade after the `SSLRequest` packet, not implicit TLS, so the terminator must speak the Postgres negotiation — `stunnel`'s `protocol` option is the usual answer (**verify the exact directive and its client-mode support before committing to this option; not yet confirmed against the stunnel manual**), otherwise `pgbouncer` with `server_tls_sslmode=verify-full` does the same job as a real Postgres proxy. | **Yes.** The verified session is established before the engine's bytes leave the host, and the engine↔tunnel hop is loopback inside one network namespace. | One package in the runtime stage, a tunnel config, an entrypoint that starts it first — plus a new failure mode to operate |
+
+(b) and (c) compose, and together are the strongest posture: migrations run once per deploy, over a verified tunnel.
+
+Whichever is chosen, re-test the table above on each Prisma upgrade. Note the standing hope recorded in the previous revision of this entry — that a future release would adopt libpq semantics and make the already-set `PGSSLROOTCERT` start working — is **not** a reasonable expectation: #10833 is closed as not planned, and v7 removed the `adapter` hook that would have made it moot.
+
+**Decision (taken):** **(b) now, (c) at Phase 5.** Implemented in the commit that added this paragraph:
+
+- `backend/docker-entrypoint.sh` no longer runs `prisma migrate deploy` — it starts the API and nothing else. `backend/Dockerfile`'s `ENTRYPOINT` is that script, so no container start touches the schema engine.
+- The one-shot `migrate` service in `docker-compose.yml` (`--profile migrate`, `restart: "no"`, run with `--rm`) is now the sole migration path, promoted from an optional operator convenience to a required release step.
+- `scripts/deploy.sh` encodes the ordering — build → migrate once → `up` — and `set -eu` aborts before any container starts if the migration step exits non-zero.
+- `README.md`, `docs/deployment.md` (new §3.1/§3.2), `docs/supabase-setup.md`, `.env.production.example` and `docker-compose.supabase.yml` no longer describe migrations as happening at container start.
+
+Exactly one container runs `migrate deploy` per deploy, regardless of replica count, so the concurrent-DDL race is structurally impossible rather than merely serialised by Prisma's advisory lock.
+
+**Residual risk, explicitly accepted:**
+
+> Between the implementation of mitigation (b) and mitigation (c), `prisma migrate deploy` connects to Supabase with TLS encryption but no certificate/hostname verification, once per deployment (not once per container boot, per replica, as previously). An attacker capable of intercepting and actively manipulating the network path between the CI/deploy runner and Supabase's endpoint during that single connection window could present a fraudulent certificate and capture the database credentials in transit. This does not affect the application's runtime database connections, which correctly verify the server certificate via the pg driver adapter — the gap is scoped exclusively to the migration tool's connection, at deploy time only. This risk is accepted as low-likelihood (requires an active, targeted MITM position against a specific CI-to-Supabase network path, not passive eavesdropping) but real, and is scheduled for full closure via a verifying local tunnel (option c) in Phase 5 of the production-readiness plan.
+
+For precision on one term in the acceptance above: the "CI/deploy runner" is, today, whichever host executes `scripts/deploy.sh` — there is no automated CD pipeline yet. When one lands, this becomes a single gated job and the acceptance applies unchanged.
+
+**Known consequence of (b), tracked separately:** nothing auto-applies a pending migration any more, so a release that ships new code without running the migrate step will boot the API against an old schema and fail at query time (readiness stays red). That is a deliberate loud failure rather than a silent self-migration, but the ordering is enforced by `scripts/deploy.sh` and documentation only — not by the container graph. See DEBT-041.
+
+**Interim state:** `PGSSLROOTCERT` is set in `docker-compose.supabase.yml` and `backend/.env` because it is correct for `psql`/`pg_dump` in the same container; every doc that mentions it says plainly that Prisma does not honour it.
+
+**Source:** measured against the live Supabase project (9 configurations, read-only `prisma migrate status`, with a `node-pg` control proving "wrong CA" is detectable); string analysis of the installed `@prisma/engines` schema-engine binary; the `Datasource` type in the installed `@prisma/config` 7.9.1; `backend/docker-entrypoint.sh`, `backend/Dockerfile`, `docker-compose.yml`, `docker-compose.supabase.yml`, `scripts/deploy.sh`, `backend/src/prisma/pg-config.ts`.
+
+**Status:** **Partially mitigated** — exposure window narrowed from continuous (every container boot, every replica) to a single deploy event. Full closure deferred to Phase 5 of the production-readiness plan via option (c), a verifying local tunnel. The residual risk is accepted in writing above. The upstream behaviour is fully characterised and proven to be a Prisma limitation rather than a local misconfiguration, so nothing further can be learned by investigating it; re-test the measurement table on each Prisma upgrade. Docs do not misstate the behaviour anywhere.
+
+---
+
+### DEBT-041 — nothing in the container graph enforces "migrate before boot"; the ordering is script- and documentation-only
+
+**Where it needs to land:** Section 4.8 (deployment), wherever the release procedure is described.
+
+**What needs to be written:** that applying migrations is a mandatory, *separate* step of a release, and that skipping it produces a runtime failure rather than an automatic recovery.
+
+Created by the DEBT-040 (b) mitigation. Removing `prisma migrate deploy` from `backend/docker-entrypoint.sh` also removed the property it incidentally provided: the API could not start on a schema older than its code, because it migrated itself first. Now it can.
+
+The ordering is currently enforced by two things, both bypassable:
+
+1. `scripts/deploy.sh`, which runs build → `migrate` one-shot → `up` and aborts on a failed migration (`set -eu`).
+2. Documentation — `README.md`, `docs/deployment.md` §3.1/§3.2, and the `migrate` service comment in `docker-compose.yml`, all of which say the step is required.
+
+A bare `docker compose up -d` still starts the app without migrating. The failure mode is loud (queries against the missing column error out; `/api/v1/health/ready` stays red) and it is not a data-integrity risk — Prisma will not write against a schema it cannot see — but it is an availability foot-gun during a release.
+
+**Options, none yet chosen:**
+
+| Option | Effect | Cost |
+| --- | --- | --- |
+| Leave as-is; rely on `scripts/deploy.sh` being the documented entry point. | Status quo. Fine for a single-operator deploy, weak once more than one person deploys. | Zero |
+| `depends_on: migrate: {condition: service_completed_successfully}` on `backend`, with `migrate` out of the profile. | Compose itself would refuse to start the backend until the migration container exited 0. Needs verifying against the installed compose version: whether a *completed* one-shot re-runs on a subsequent `up`, and how the condition interacts with `profiles`, is version-dependent and was **not** tested. | Small, but needs a real compose run to confirm semantics |
+| A boot-time schema-version assertion in the app, over the **already-verified** pg pool (compare the latest row in `_prisma_migrations` against the migration directories baked into the image; refuse to start on a mismatch). | Restores the "never serve on a stale schema" guarantee without reintroducing the DEBT-040 exposure, because it uses the driver-adapter connection, not the schema engine. | Moderate: new startup check plus tests |
+
+The third option is the one that actually restores the lost guarantee; it is deliberately not implemented in the same change as the (b) mitigation to keep that change reviewable.
+
+**Source:** `backend/docker-entrypoint.sh`, `backend/Dockerfile`, `docker-compose.yml`, `scripts/deploy.sh`, `docs/deployment.md` §3.2. Related: DEBT-040.
+
+**Status:** Open — introduced knowingly as a consequence of the DEBT-040 (b) mitigation, logged rather than silently absorbed. Not blocking; revisit alongside DEBT-040's Phase 5 closure, since both touch the deploy path.
 
 ---
 
