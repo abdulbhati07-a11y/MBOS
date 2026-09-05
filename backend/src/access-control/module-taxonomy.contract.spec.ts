@@ -69,8 +69,7 @@ describe('module taxonomy contract (frontend ↔ backend)', () => {
 
     it('adds nothing beyond the frontend list except the sanctioned billing key', () => {
       const backendOnly = MODULE_KEYS.filter(
-        (moduleKey) =>
-          !(frontendModuleValues as string[]).includes(moduleKey),
+        (moduleKey) => !(frontendModuleValues as string[]).includes(moduleKey),
       );
       // Exactly `['billing']` — a new backend-only key must be a deliberate
       // decision recorded here, not something that quietly appears.

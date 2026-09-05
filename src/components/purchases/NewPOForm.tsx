@@ -1,12 +1,37 @@
 "use client"
 
+// ---------------------------------------------------------------------------
+// src/components/purchases/NewPOForm.tsx
+//
+// Draft-a-PO form, submitting to `POST /purchase-orders`.
+//
+// The form works in **rupees** (major units) because that is what a buyer types
+// and reads; the conversion to integer paisa happens once, at submit, via
+// `parseMoneyToMinor`. The supplier and product pickers are now the live lists —
+// only active suppliers can be chosen, and the product's stored `costCents`
+// pre-fills a line's unit cost as an editable default.
+// ---------------------------------------------------------------------------
+
 import * as React from "react"
-import { useForm, useFieldArray } from "react-hook-form"
+import { useForm, useFieldArray, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+
 import { newPOSchema, NewPOValues } from "@/lib/validation/purchases"
-import { MOCK_PRODUCTS } from "@/lib/mock-data/products"
-import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
-import { PurchaseOrderRecord, POLineRecord } from "@/lib/mock-data/purchase-orders"
+import { fetchProducts, productKeys } from "@/lib/api/inventory/queries"
+import { fetchSuppliers, supplierKeys } from "@/lib/api/suppliers/queries"
+import {
+  createPurchaseOrder,
+  type CreatePOLineInput,
+} from "@/lib/api/purchases/mutations"
+import { purchaseOrderKeys } from "@/lib/api/purchases/queries"
+import { isApiError } from "@/lib/api/client"
+import {
+  formatMoney,
+  formatMoneyMinor,
+  parseMoneyToMinor,
+  CURRENCY_SYMBOL,
+} from "@/lib/format/currency"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,18 +60,40 @@ import {
 } from "@/components/ui/table"
 import { Plus, Trash2 } from "lucide-react"
 
+/** A high fixed page — the picker lists options rather than paginating. */
+const PICKER_PAGE_SIZE = 100
+
 interface NewPOFormProps {
-  onPOCreated: (po: PurchaseOrderRecord) => void
+  /** Called after a PO is created so the page can switch to the list tab. */
+  onCreated: () => void
 }
 
-export function NewPOForm({ onPOCreated }: NewPOFormProps) {
+export function NewPOForm({ onCreated }: NewPOFormProps) {
+  const queryClient = useQueryClient()
   const [selectedProductId, setSelectedProductId] = React.useState<string>("")
+  const [formError, setFormError] = React.useState<string | null>(null)
+
+  const suppliersQuery = useQuery({
+    queryKey: supplierKeys.list({ isActive: true, pageSize: PICKER_PAGE_SIZE }),
+    queryFn: ({ signal }) =>
+      fetchSuppliers({ isActive: true, pageSize: PICKER_PAGE_SIZE }, signal),
+  })
+  const suppliers = suppliersQuery.data?.data ?? []
+
+  const productsQuery = useQuery({
+    queryKey: productKeys.list({ isActive: true, pageSize: PICKER_PAGE_SIZE }),
+    queryFn: ({ signal }) =>
+      fetchProducts({ isActive: true, pageSize: PICKER_PAGE_SIZE }, signal),
+  })
+  const products = productsQuery.data?.data ?? []
 
   const form = useForm<NewPOValues>({
-    // as any: known zodResolver + Zod v4 interop gap (same pattern as sales)
-    resolver: zodResolver(newPOSchema) as any,
+    // Asserted, not assigned: `z` optional/default fields make the schema's input
+    // type differ from `NewPOValues`. `Resolver<NewPOValues>` narrows the
+    // assertion to one shape rather than using `any`.
+    resolver: zodResolver(newPOSchema) as unknown as Resolver<NewPOValues>,
     defaultValues: {
-      supplierName: "",
+      supplierId: "",
       notes: "",
       lines: [],
     },
@@ -59,19 +106,29 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
 
   const watchedLines = form.watch("lines")
 
-  // Derived grand total — all display values via .toFixed(2)
+  // Derived grand total, in rupees — float arithmetic is fine for a display
+  // figure; the exact conversion to paisa happens per line at submit.
   const grandTotal = watchedLines.reduce(
     (sum, line) => sum + (line.unitCost * line.quantity || 0),
     0
   )
 
+  const create = useMutation({
+    mutationFn: createPurchaseOrder,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: purchaseOrderKeys.all })
+      form.reset({ supplierId: "", notes: "", lines: [] })
+      onCreated()
+    },
+  })
+
   // ---------------------------------------------------------------------------
-  // Add product as line item — pre-fills unitCost from product.cost.
-  // Buyer can override unitCost after adding. [PROV-FR-PUR-04]
+  // Add product as line item — pre-fills unitCost from the product's stored cost
+  // (paisa → rupees for the form). Buyer can override afterwards. [PROV-FR-PUR-04]
   // ---------------------------------------------------------------------------
   const handleAddProduct = () => {
     if (!selectedProductId) return
-    const product = MOCK_PRODUCTS.find((p) => p.id === selectedProductId)
+    const product = products.find((p) => p.id === selectedProductId)
     if (!product) return
 
     const existingIdx = fields.findIndex((f) => f.productId === product.id)
@@ -84,81 +141,92 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
         lineTotal: existing.unitCost * newQty,
       })
     } else {
+      const unitCost = product.costCents / 100
       append({
         productId: product.id,
         productName: product.name,
-        unitCost: product.cost, // pre-filled from product.cost; buyer may override
+        unitCost,
         quantity: 1,
-        lineTotal: product.cost,
+        lineTotal: unitCost,
       })
     }
     setSelectedProductId("")
   }
 
-  // ---------------------------------------------------------------------------
-  // Quantity change — recomputes lineTotal in real time [PROV-FR-PUR-04]
-  // ---------------------------------------------------------------------------
   const handleQuantityChange = (index: number, rawValue: string) => {
     const qty = Math.max(1, parseInt(rawValue, 10) || 1)
     const line = watchedLines[index]
-    update(index, {
-      ...line,
-      quantity: qty,
-      lineTotal: line.unitCost * qty,
-    })
+    update(index, { ...line, quantity: qty, lineTotal: line.unitCost * qty })
   }
 
-  // ---------------------------------------------------------------------------
-  // Unit cost change — recomputes lineTotal in real time [PROV-FR-PUR-04]
-  // ---------------------------------------------------------------------------
   const handleUnitCostChange = (index: number, rawValue: string) => {
     const cost = Math.max(0, parseFloat(rawValue) || 0)
     const line = watchedLines[index]
-    update(index, {
-      ...line,
-      unitCost: cost,
-      lineTotal: cost * line.quantity,
-    })
+    update(index, { ...line, unitCost: cost, lineTotal: cost * line.quantity })
   }
 
   // ---------------------------------------------------------------------------
-  // Submit [PROV-FR-PUR-04]
+  // Submit — map the rupee-denominated form lines onto the API's paisa shape,
+  // dropping the display-only fields (productName, lineTotal) that would trip
+  // `forbidNonWhitelisted`. [PROV-FR-PUR-04]
   // ---------------------------------------------------------------------------
-  const onSubmit = (data: NewPOValues) => {
-    const subtotal = data.lines.reduce((s, l) => s + l.unitCost * l.quantity, 0)
+  const onSubmit = async (data: NewPOValues) => {
+    setFormError(null)
 
-    const newPO: PurchaseOrderRecord = {
-      id: `po-${Date.now()}`,
-      poNumber: `PO-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
-      date: new Date().toISOString(),
-      supplierName: data.supplierName,
-      status: "Draft",
-      subtotal,
-      total: subtotal,
-      notes: data.notes ?? "",
-      lines: data.lines.map<POLineRecord>((l) => ({
-        productId: l.productId,
-        productName: l.productName,
-        unitCost: l.unitCost,
-        quantity: l.quantity,
-        lineTotal: l.unitCost * l.quantity,
-      })),
+    const lines: CreatePOLineInput[] = []
+    for (const line of data.lines) {
+      const unitCostCents = parseMoneyToMinor(line.unitCost)
+      if (unitCostCents === null) {
+        setFormError(
+          `“${line.productName}” has an invalid unit cost. Use at most two decimal places.`
+        )
+        return
+      }
+      lines.push({ productId: line.productId, unitCostCents, quantity: line.quantity })
     }
 
-    onPOCreated(newPO)
-    form.reset({ supplierName: "", notes: "", lines: [] })
+    try {
+      await create.mutateAsync({
+        supplierId: data.supplierId,
+        notes: data.notes ? data.notes : undefined,
+        lines,
+      })
+    } catch (err) {
+      if (!isApiError(err)) {
+        setFormError("Could not reach the server. The order was not created.")
+        return
+      }
+      if (err.isForbidden) {
+        setFormError("You do not have permission to create purchase orders.")
+        return
+      }
+      // 422s here are line-level (e.g. an unknown productId) and do not map onto a
+      // single form field; the server message is the most useful thing to show.
+      setFormError(err.message)
+    }
   }
+
+  const dataError = suppliersQuery.isError || productsQuery.isError
+  const submitting = create.isPending || form.formState.isSubmitting
 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-6">
+        {dataError && (
+          <p
+            role="alert"
+            className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            Could not load suppliers or products. Reload the page to try again.
+          </p>
+        )}
 
         {/* ── Supplier select ── */}
         <div className="rounded-md border bg-card p-4 space-y-3">
           <h3 className="font-medium text-sm">Supplier</h3>
           <FormField
             control={form.control}
-            name="supplierName"
+            name="supplierId"
             render={({ field }) => (
               <FormItem>
                 <Select value={field.value} onValueChange={(v) => field.onChange(v ?? "")}>
@@ -168,8 +236,8 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {MOCK_SUPPLIERS.filter((s) => s.isActive).map((s) => (
-                      <SelectItem key={s.id} value={s.name}>
+                    {suppliers.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
                         {s.name}
                         {s.categories ? ` — ${s.categories}` : ""}
                       </SelectItem>
@@ -194,9 +262,9 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
                 <SelectValue placeholder="Select a product to add…" />
               </SelectTrigger>
               <SelectContent>
-                {MOCK_PRODUCTS.map((p) => (
+                {products.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} — cost ${p.cost.toFixed(2)}
+                    {p.name} — cost {formatMoneyMinor(p.costCents)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -224,7 +292,9 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Product</TableHead>
-                  <TableHead className="text-right w-32">Unit Cost ($)</TableHead>
+                  <TableHead className="text-right w-32">
+                    Unit Cost ({CURRENCY_SYMBOL})
+                  </TableHead>
                   <TableHead className="text-right w-28">Qty</TableHead>
                   <TableHead className="text-right">Line Total</TableHead>
                   <TableHead className="w-10" />
@@ -258,7 +328,7 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
                         />
                       </TableCell>
                       <TableCell className="text-right text-sm font-medium">
-                        ${((line?.unitCost ?? 0) * (line?.quantity ?? 1)).toFixed(2)}
+                        {formatMoney((line?.unitCost ?? 0) * (line?.quantity ?? 1))}
                       </TableCell>
                       <TableCell>
                         <Button
@@ -280,10 +350,12 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
           )}
         </div>
 
-        {/* Zod error for empty lines */}
-        {(form.formState.errors.lines as any)?.message && (
+        {/* Zod error for empty lines. Both spellings are checked because RHF puts
+            an array-level message on `.root` in current versions and on `.message`
+            in older ones; whichever is populated, the operator sees it. */}
+        {form.formState.errors.lines?.message !== undefined && (
           <p className="text-sm text-destructive">
-            {(form.formState.errors.lines as any).message}
+            {form.formState.errors.lines.message}
           </p>
         )}
         {form.formState.errors.lines?.root && (
@@ -315,14 +387,23 @@ export function NewPOForm({ onPOCreated }: NewPOFormProps) {
             <h3 className="font-medium mb-3">Order Summary</h3>
             <div className="flex justify-between font-semibold text-base">
               <span>Grand Total</span>
-              <span>${grandTotal.toFixed(2)}</span>
+              <span>{formatMoney(grandTotal)}</span>
             </div>
           </div>
         </div>
 
+        {formError !== null && (
+          <p
+            role="alert"
+            className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {formError}
+          </p>
+        )}
+
         <div className="flex justify-end">
-          <Button type="submit" size="lg">
-            Create Purchase Order
+          <Button type="submit" size="lg" disabled={submitting || dataError}>
+            {submitting ? "Creating…" : "Create Purchase Order"}
           </Button>
         </div>
       </form>

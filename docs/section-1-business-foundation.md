@@ -75,14 +75,14 @@ The model as it actually stands:
 - **Industry modules are the only opt-in, individually billable items.** `clinic`, `pharmacy`, and `restaurant` are the only keys that ever appear in `TenantModuleSubscription`, and therefore the only things a toggle can enable or disable (UC-04).
 - **Enabling or disabling an industry module takes effect on the next request** — not the next deployment, not the next login. *[pinned — FR-BILL-03, UC-04.]*
 
-**Plan catalogue** *[pinned — transcribed from the Section 6.10 `GET /plans` example and seeded by `SEED_PLANS`]*:
+**Plan catalogue** *[pinned — authoritative source is `SEED_PLANS` in `backend/src/access-control/access-control.constants.ts`; the Section 6.10 `GET /plans` example is derived from it, not the reverse]*:
 
 | Plan | Monthly | Annual | Annual framing |
 |---|---|---|---|
-| Starter | $19.00 (`1900`) | $190.00 (`19000`) | Ten months for the price of twelve |
-| Growth | $49.00 (`4900`) | $490.00 (`49000`) | Same ratio |
+| Starter | Rs 4,999.00 (`499900`) | Rs 49,990.00 (`4999000`) | Ten months for the price of twelve |
+| Growth | Rs 12,999.00 (`1299900`) | Rs 129,990.00 (`12999000`) | Same ratio |
 
-All monetary values are integer minor units (cents). See NFR-14.
+All monetary values are integer minor units — paisa, for the default `PKR`. See NFR-14 and Section 4.6. The `*Cents` suffix on `SEED_PLANS`' fields (`priceMonthlyCents`) is a misnomer inherited from Section 5.10's naming rule; it holds paisa (DEBT-023).
 
 **[open] — industry-module add-on pricing does not exist.** There is no per-module price anywhere in the system: `PlanModule` has no price column, and no invoice entity exists. Consequently the proration figure returned by `PATCH /billing/modules` is `null` rather than a fabricated number. Setting add-on prices is a product decision that must precede any proration work. *[pinned — DEBT-018.]*
 

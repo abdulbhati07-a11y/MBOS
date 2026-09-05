@@ -7,6 +7,7 @@ import {
   BarChart3,
   Settings,
   ShieldAlert,
+  UserCog,
   CreditCard,
   Stethoscope,
   Pill,
@@ -50,6 +51,7 @@ export const navConfig: NavGroup[] = [
     label: "Admin",
     items: [
       { label: "Settings", href: "/settings", icon: Settings, moduleKey: "settings" },
+      { label: "Users", href: "/users", icon: UserCog, moduleKey: "settings" },
       { label: "Roles", href: "/roles", icon: ShieldAlert, moduleKey: "settings" },
       { label: "Billing", href: "/billing", icon: CreditCard, moduleKey: "settings" },
     ],

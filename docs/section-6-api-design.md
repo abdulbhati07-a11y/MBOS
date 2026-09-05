@@ -1,8 +1,14 @@
 # Section 6: API Design
 
-> **Document status:** Draft — written against Sections 4 and 5 (committed at 87d746c and f225c75) and the frontend build (Steps 1–12).  
-> Rate limit thresholds are TBD pending product decision — see DEBT-013.  
-> AI endpoints are out of scope — see Section 7.
+> **Document status:** Reconciled against the implemented backend. Originally
+> written against Sections 4 and 5 (committed at 87d746c and f225c75) and the
+> frontend build (Steps 1–12); amended after an endpoint-by-endpoint diff against
+> the 66 live routes.  
+> Rate limit thresholds are **resolved** — see 6.1 (DEBT-013).  
+> The middleware chain's two previously-undocumented behaviours are **resolved** —
+> see 6.2 (DEBT-017).  
+> AI, search and dashboard-insight endpoints are specified in Section 7, not here;
+> 6.14 lists the live routes this section deliberately does not define.
 
 ---
 
@@ -68,26 +74,62 @@ All errors use this shape regardless of HTTP status code:
 | 422 | Unprocessable Entity — body passes parsing but fails validation |
 | 429 | Too Many Requests |
 | 500 | Internal Server Error |
+| 503 | Service Unavailable — the instance cannot serve requests (readiness probe: database unreachable) |
 
 ### Monetary Values
 
-All monetary fields in request and response bodies are integers in cents — never floats (DEBT-012, Section 4.6). The field naming convention mirrors Section 5's `*Cents` suffix:
+All monetary fields in request and response bodies are integers in the tenant currency's **minor units** — never floats (DEBT-012, Section 4.6). The tenant currency is `TenantSettings.currencyCode`, which defaults to `PKR`, so the minor unit is the paisa: `299900` is Rs 2,999.00. The field naming convention mirrors Section 5's `*Cents` suffix, which predates the currency choice and is a misnomer for PKR — see DEBT-023.
 
 ```json
-{ "priceCents": 2999, "totalCents": 26999 }
+{ "priceCents": 150000, "totalCents": 1350000 }
 ```
 
-The frontend divides by 100 before calling `.toFixed(2)` for display. No monetary float values cross the API boundary in either direction.
+No monetary float values cross the API boundary in either direction. The frontend formats these through `formatMoneyMinor` in `src/lib/format/currency.ts`, which splits whole from fractional units with integer arithmetic — not by dividing by 100 and calling `.toFixed(2)`, which would put a float back on an amount that arrived exact. Writes convert with `parseMoneyToMinor`, on the digit string rather than via `Math.round(value * 100)`.
 
-### Rate Limiting *(DEBT-013 — thresholds TBD)*
+Values are capped at 2,147,483,647 (int4), or Rs 21,474,836.47. Exceeding it is a `422` naming the limit, not a `500` from the driver.
 
-Rate limiting is enforced at the middleware layer (step 2 of the chain in 6.2) before authentication. Two separate limits apply:
+### Rate Limiting *(resolves DEBT-013)*
 
-**Authenticated requests (per tenant):** `X` requests per minute per `tenantId`, extracted from the JWT. Exceeding this returns `429` with a `Retry-After: <seconds>` header. *(Threshold TBD — DEBT-013.)*
+Rate limiting is enforced at the middleware layer. It is **split around
+authentication** rather than sitting entirely before it — see the note under step
+2 of the chain in 6.2 for why a single pre-auth step cannot satisfy both limits.
+Three limits apply:
 
-**Unauthenticated auth endpoints** (`POST /auth/login`, `POST /auth/signup`): stricter per-IP limit to prevent credential-stuffing. *(Threshold TBD — DEBT-013.)*
+**Authenticated requests (per tenant):** 300 requests per minute per `tenantId`,
+extracted from the JWT, plus a burst allowance of 50 — an effective ceiling of
+**350** per one-minute window. That is roughly 5 req/s sustained, comfortably
+above an interactive UI's needs, with the burst covering a dashboard that opens
+several widgets at once.
 
-**Burst allowance:** A short burst above the per-minute rate is permitted before throttling. *(Burst window and multiplier TBD — DEBT-013.)*
+**Unauthenticated auth endpoints** (`POST /auth/login`, `POST /auth/mfa/verify`,
+`POST /auth/forgot-password`, `POST /auth/reset-password`): 10 requests per
+minute per IP plus a burst of 3 — an effective ceiling of **13**. Loose enough
+for typos and a shared office NAT, tight enough that online credential guessing
+is useless.
+
+**Everything else before authentication (per IP):** 120 requests per minute plus
+a burst of 40 — an effective ceiling of **160**. This bounds anything arriving
+from one address before its tenant is known.
+
+**Burst is additive, not a multiplier.** "Burst 50" means 50 extra requests, so
+the effective ceiling is `perMinute + burst`. It is folded into one counter per
+key rather than tracked as a second window: with a one-minute sliding window,
+permitting `perMinute + burst` events is exactly what "a short burst above the
+rate" means.
+
+Every threshold has an environment override
+(`RATE_LIMIT_TENANT_PER_MINUTE`, `RATE_LIMIT_AUTH_IP_BURST`, and so on;
+`RATE_LIMIT_ENABLED="false"` switches limiting off for the test suite). Tuning
+means changing configuration, never the guard or the service. The defaults above
+live in `backend/src/rate-limit/rate-limit.config.ts`.
+
+**Proxy trust is part of this decision.** The per-IP limits are only sound if the
+client address cannot be forged. `X-Forwarded-For` is therefore never trusted
+unconditionally: Express's `trust proxy` is set from the `TRUST_PROXY` variable
+(a pinned proxy IP/CIDR, or a hop count), and the literal `true` — trust every
+hop, i.e. believe any client's forged header — is rejected at boot. A deployment
+behind a reverse proxy must set `TRUST_PROXY` to that proxy's address, or every
+per-IP limit above collapses to a single shared bucket.
 
 **429 response shape:**
 ```json
@@ -116,8 +158,9 @@ Incoming HTTP request
    Security headers (X-Frame-Options, HSTS, etc.), CORS origin validation.
 
   ▼
-2. Rate Limiter
-   Per-tenant (authenticated) or per-IP (unauthenticated). See 6.1.
+2a. Rate Limiter — per IP (pre-auth)
+   Strict on the auth endpoints (13/min), looser on everything else (160/min).
+   Runs before any bcrypt work, so a flood cannot be turned into CPU cost.
 
   ▼
 3. Auth Middleware
@@ -125,6 +168,11 @@ Incoming HTTP request
    On success: extracts tenantId, userId, roleId, roleName → stores in AsyncLocalStorage.
    On failure: returns 401.
    Public endpoints (@Public decorator) skip steps 3–6.
+
+  ▼
+2b. Rate Limiter — per tenant (post-auth)
+   350/min per tenantId. Cannot run at 2a: tenantId does not exist until
+   step 3 has validated the JWT. See the note below.
 
   ▼
 4. Tenant Isolation Middleware
@@ -137,6 +185,7 @@ Incoming HTTP request
    Reads the requested module from the route metadata.
    Queries TenantModuleSubscription for (tenantId, moduleKey).
    If module is not enabled (disabledAt IS NOT NULL or row absent): returns 403.
+   If the route declares NO module and is not @Public: returns 403 (fail closed).
    This enforces FR-BILL-03 — module access checked on every request, not just at login.
 
   ▼
@@ -144,6 +193,7 @@ Incoming HTTP request
    Reads the required (module, action) from the route metadata.
    Queries RolePermission for (roleId, module, action).
    If not granted: returns 403.
+   If the route declares NO permission and is not @Public: returns 403 (fail closed).
    Module access (step 5) and RBAC (step 6) are separate — both must pass.
 
   ▼
@@ -158,11 +208,69 @@ Incoming HTTP request
 
 **Key constraint:** Steps 5 and 6 are not the same check. A module can be enabled for a tenant but a specific user may still lack the required action permission. A user can have `sales.write` permission but if the Sales module is not in their tenant's subscription, they still get 403 at step 5.
 
+### Why the rate limiter is split *(resolves DEBT-017)*
+
+6.1 requires a per-tenant limit keyed on the JWT's `tenantId`, and this chain puts
+rate limiting before authentication. Both cannot hold at once: `tenantId` does not
+exist until the JWT has been validated at step 3.
+
+The resolution is the split shown above. The per-IP limit runs first, because that
+is where the unauthenticated flood risk actually lives and because it must precede
+any bcrypt work — otherwise a login flood becomes a CPU exhaustion attack. The
+per-tenant limit runs immediately after authentication, the earliest point at
+which its key exists.
+
+### The default for a route that declares no module or action *(resolves DEBT-017)*
+
+Steps 5 and 6 read their requirement "from the route metadata". When a route is
+authenticated but carries no such metadata, the chain **fails closed**: 403.
+
+The reasoning is that the two failure modes are not symmetric. Fail-open turns
+every forgotten decorator into a silently unguarded endpoint, discovered by
+whoever finds it first. Fail-closed turns the same mistake into a 403 that a test
+catches immediately. The cost of being wrong in the safe direction is a broken
+route in development; the cost of being wrong the other way is an exposed one in
+production.
+
+That default requires an explicit exemption for authenticated routes which
+legitimately belong to no business module. It is `@NoModuleRequired()`, and it is
+deliberately narrow:
+
+| Route | Why it is exempt |
+| --- | --- |
+| `GET /api/v1/auth/me` | Returns the caller's own identity and permission set. It is what the frontend calls to *discover* its permissions, so gating it on a permission would be circular. |
+| `GET /api/v1/search` | Search crosses modules. A flat gate would either lock the search box behind one module's permission or leak sections a role cannot see. Instead each section filters on the caller's own permissions inside the handler — the same unscoped role lookup step 6 performs, including the tenant-boundary re-check, but returning an empty section rather than a 403, so one missing permission does not blank the whole search box. |
+
+Anything else authenticated must declare `@RequiresPermission(module, action)`.
+
+### The chain's order is guaranteed, not incidental
+
+The ordering above is itself a security property: rate limiting must precede
+bcrypt, steps 5–6 depend on the context step 4 binds, and step 2b depends on step
+3 having run. Nest resolves independently-registered global guards in provider
+order, which is stable in practice but not a contract.
+
+So the implementation does not register four global guards and hope. Steps 2–6 are
+sequenced explicitly inside one guard —
+`backend/src/common/guards/api-access.guard.ts` — which calls each check in the
+order written here. Reordering the chain requires editing that file, which is
+exactly where a reviewer would look for it.
+
 ---
 
 ## 6.3 Authentication Endpoints
 
-All auth endpoints are `@Public` — they bypass the auth/permission middleware chain (steps 3–6 in 6.2). Rate limiting (step 2) still applies, with stricter per-IP limits on login and signup.
+All auth endpoints except `GET /auth/me` are `@Public` — they bypass the
+auth/permission middleware chain (steps 3–6 in 6.2). Rate limiting (step 2a)
+still applies, with the stricter per-IP limit on the four credential-handling
+routes: `login`, `mfa/verify`, `forgot-password` and `reset-password`.
+`refresh` and `logout` are public but not strictly limited — neither accepts a
+guessable credential, and a refresh token is single-use.
+
+> `POST /auth/signup` was named as a rate-limited endpoint in earlier revisions
+> of 6.1 and this section, but was never specified here and does not exist.
+> Tenant provisioning is a Section 10 concern (see 6.13). The references have
+> been removed rather than left to imply an endpoint.
 
 ### POST /api/v1/auth/login
 
@@ -214,14 +322,19 @@ Revokes the current refresh token (`revokedAt = now()`). Clears the cookie.
 
 **Response:** `204 No Content`
 
-### POST /api/v1/auth/password/forgot
+### POST /api/v1/auth/forgot-password
 
 Initiates email-based password reset. Always returns `200` regardless of whether the email exists (prevents email enumeration).
 
 **Request:** `{ "email": "..." }`
 **Response:** `200 OK` — no body
 
-### POST /api/v1/auth/password/reset
+> Earlier revisions of this section specified `POST /auth/password/forgot`. The
+> implemented and client-facing path is `/auth/forgot-password`; the spec was the
+> outlier, and it is corrected here rather than the working route being changed.
+> Same for the reset endpoint below.
+
+### POST /api/v1/auth/reset-password
 
 Consumes a reset token and sets a new password. Password complexity is validated at the application layer per DEBT-001 rules.
 
@@ -242,9 +355,17 @@ The DB-state lookup is deliberate: if an admin changes a user's role while their
   "roleName": "Manager",
   "roleId": "role-uuid",
   "tenantId": "tenant-uuid",
-  "mfaEnabled": true
+  "mfaEnabled": true,
+  "branchId": "branch-uuid",
+  "branchName": "Main Branch"
 }
 ```
+
+**On `branchId` / `branchName`:** added during frontend integration, because Section 6.3 as originally written left the POS unable to operate. `POST /orders` (6.7) and `POST /inventory/adjustments` (6.8) both require a `branchId`, and the only endpoint listing branches is `GET /branches` (6.4), which requires `settings.read` — a permission the Cashier role does not hold. The one role whose entire job is ringing up sales therefore had no way to discover the branch every sale must be filed against.
+
+It is returned here rather than defaulted inside `POST /orders` for two reasons: `/auth/me` is already the endpoint that answers "who am I and what may I do", and it is `@NoModuleRequired`, so this adds no permission surface. Keeping `branchId` **required** on the write endpoints means an order can never be silently filed against a branch nobody chose.
+
+The value is the tenant's default branch — `isDefault` first, then oldest — restricted to branches that are active and not soft-deleted, since `isActive: false` exists precisely to stop new activity against a retired branch. It is `null` when the tenant has no usable branch; a client must surface that rather than substitute a guess, because a tenant in that state genuinely cannot record a sale. When per-user branch assignment lands (FR-TEN-03), this becomes the user's assigned branch and no caller changes.
 
 **Performance note:** This endpoint is called once per session start, not on every page navigation. If it becomes a hot path (e.g., called on every SPA route change), a short TTL cache keyed on `userId` should be introduced at the application layer. This is not designed now — flagged for the implementation phase.
 
@@ -278,13 +399,15 @@ Returns `TenantSettings` for the current tenant. Called at session start to pre-
 ```json
 {
   "companyName": "Acme Corp",
-  "defaultTaxRateBps": 800,
-  "currencyCode": "USD",
-  "timezone": "America/New_York"
+  "defaultTaxRateBps": 1700,
+  "currencyCode": "PKR",
+  "timezone": "Asia/Karachi"
 }
 ```
 
-`defaultTaxRateBps` is in basis points (800 = 8.00%). The frontend converts to percentage for display: `(defaultTaxRateBps / 100).toFixed(2) + '%'`.
+`defaultTaxRateBps` is in basis points (1700 = 17.00%, Pakistan's standard GST rate). The frontend converts to percentage for display: `(defaultTaxRateBps / 100).toFixed(2) + '%'`.
+
+Note that the shipped column defaults are `0` for `defaultTaxRateBps` and `UTC` for `timezone`, not the values shown above — a tax rate applied without the tenant having chosen it would land in records BR-03 forbids editing, and UTC is the storage default that also has to serve non-PK tenants. The example shows a configured tenant, not a fresh one.
 
 ### PATCH /api/v1/settings
 
@@ -418,6 +541,39 @@ Paginated order list. Supports filtering:
 
 Requires `sales.read`.
 
+**Response rows carry `customerName` and `lineCount`** in addition to the `Order` columns:
+
+```json
+{
+  "id": "uuid",
+  "orderNumber": "#1042",
+  "date": "2026-08-26T09:14:00.000Z",
+  "customerId": "uuid-or-null",
+  "customerName": "Ayesha Khan",
+  "lineCount": 3,
+  "status": "Completed",
+  "taxRateBps": 1700,
+  "subtotalCents": 450000,
+  "taxAmountCents": 76500,
+  "totalCents": 526500
+}
+```
+
+**On `customerName` / `lineCount`:**
+
+Both are additions beyond this section's original field list, and both exist to keep the sales history renderable in one request. Without `customerName` a list can only show a customer *id*, and the only way to name the buyer is a `GET /customers/:id` per row — an N+1 on the busiest read in the product. Without `lineCount` an item count requires loading every order's lines and discarding them.
+
+They are joined, not stored: one join per page, no extra round trips.
+
+`customerName` is deliberately **not** a snapshot, which puts it in opposition to `OrderLine.productNameSnapshot` (BR-10). The distinction is intentional and worth stating, because the two look like the same problem:
+
+- A line's product name must never move. It is what the receipt said when it printed, and a repricing or rename must not rewrite history.
+- An order's customer name should move. A renamed customer is the *same* customer, and a sales history that still shows a former name reads as a different person — which is worse than useless when the list is being used to find someone's orders.
+
+`customerName` is `null` for a walk-in sale, exactly as `customerId` is. Both are returned rather than one being derived from the other, so a client never has to decide whether an absent name means "walk-in" or "not loaded".
+
+`lineCount` counts **lines, not units** — `2` means two distinct products were sold, not two items.
+
 ### POST /api/v1/orders
 
 Creates an order with line items. Requires `sales.write`.
@@ -430,7 +586,7 @@ Creates an order with line items. Requires `sales.write`.
   "customerId": "uuid-or-null",
   "branchId": "uuid",
   "paymentMethod": "Cash",
-  "taxRateBps": 800,
+  "taxRateBps": 1700,
   "lines": [
     { "productId": "uuid", "quantity": 2 }
   ]
@@ -459,7 +615,7 @@ Requires `sales.refund` permission — not `sales.write` or `sales.delete`. The 
 
 **Request:**
 ```json
-{ "amountCents": 2999, "reason": "Customer returned item" }
+{ "amountCents": 150000, "reason": "Customer returned item" }
 ```
 
 `amountCents` may be less than `Order.totalCents` (partial refund). Multiple refunds on the same order are permitted — each creates a new `RefundTransaction` row. `Order.status = 'Refunded'` means "at least one refund exists" — not necessarily fully refunded.
@@ -600,9 +756,9 @@ Enables or disables a module. Effect is immediate — the next request from any 
 {
   "moduleKey": "clinic",
   "enabled": true,
-  "proratedChargeCents": 1250,
+  "proratedChargeCents": 125000,
   "effectiveDate": "2026-08-01",
-  "message": "Module will be enabled. A prorated charge of $12.50 will be applied to your next invoice."
+  "message": "Module will be enabled. A prorated charge of Rs 1,250.00 will be applied to your next invoice."
 }
 ```
 
@@ -615,7 +771,7 @@ Returns the current `TenantSubscription` with plan details. Readable with `setti
 **Response:**
 ```json
 {
-  "plan": { "name": "Growth", "priceMonthly": 4900 },
+  "plan": { "name": "Growth", "priceMonthly": 1299900 },
   "status": "Active",
   "currentPeriodStart": "2026-08-01T00:00:00Z",
   "currentPeriodEnd": "2026-08-31T23:59:59Z"
@@ -633,13 +789,13 @@ Returns available plans with included modules. Public within the authenticated t
     {
       "id": "...",
       "name": "Starter",
-      "priceMonthly": 1900,
+      "priceMonthly": 499900,
       "modules": ["dashboard", "inventory", "sales", "customers"]
     },
     {
       "id": "...",
       "name": "Growth",
-      "priceMonthly": 4900,
+      "priceMonthly": 1299900,
       "modules": ["dashboard", "inventory", "sales", "customers", "purchases", "reports"]
     }
   ]
@@ -692,7 +848,9 @@ Items whose **resolution path is fully specified** by Section 6 (endpoint contra
 | DEBT-008 — Company profile tax rate | `GET /settings` returns `defaultTaxRateBps`; `NewOrderForm` pre-fills from this |
 | DEBT-009 — Reports export | `?format=csv` on report endpoints; PDF deferred |
 | DEBT-011 — MOCK_ORDERS static *(resolved in code; API replaces context)* | `GET /orders` replaces `OrdersContext`; all consumers require no shape changes |
-| DEBT-012 — Float monetary values | All API bodies use `*Cents` integers; frontend divides by 100 for display |
+| DEBT-012 — Float monetary values | All API bodies use `*Cents` integers holding minor units; frontend formats via `src/lib/format/currency.ts` |
+| DEBT-013 — Rate limit thresholds | **Resolved in 6.1** — 350/min per tenant, 13/min per IP on the auth routes, 160/min per IP otherwise, every threshold with an env override |
+| DEBT-017 — Under-specified middleware chain | **Resolved in 6.2** — the rate limiter's split around authentication, the fail-closed default for a route with no module/action, `@NoModuleRequired()` and its two current users, and the single-guard ordering guarantee |
 
 Items not addressed here (genuinely deferred to other sections):
 
@@ -703,7 +861,6 @@ Items not addressed here (genuinely deferred to other sections):
 | DEBT-003 — Supplier name snapshot on POs | Section 9 (Purchases spec) |
 | DEBT-005 — Supplier category taxonomy | Section 9 |
 | DEBT-010 — Customer/Supplier ledger | Sections 8/9 |
-| DEBT-013 — Rate limit thresholds | Numeric values TBD — product decision required |
 
 ---
 
@@ -715,3 +872,52 @@ Items not addressed here (genuinely deferred to other sections):
 - **Super-tenant / admin endpoints** (global tenant provisioning, plan CRUD) → Section 10
 - **Implementation code** (NestJS decorators, Prisma syntax) — build task, not design doc
 - **PDF export** — library decision deferred; CSV is in scope via `?format=csv`
+
+---
+
+## 6.14 Live routes this section does not define
+
+The backend serves 66 routes. Sections 6.3–6.11 define 59 of them, and every one
+of those 59 exists in code — there are no missing endpoints. The remaining seven
+are listed here so the difference is a record rather than a discrepancy someone
+rediscovers by diffing.
+
+| METHOD | PATH | ACCESS | Where it belongs |
+| --- | --- | --- | --- |
+| GET | `/api/v1/health` | `@Public` | Below — no other section claims it |
+| GET | `/api/v1/health/ready` | `@Public` | Below |
+| GET | `/api/v1/search` | authenticated, `@NoModuleRequired` | Section 7 |
+| GET | `/api/v1/dashboard/insights` | `dashboard.read` | Section 7 |
+| GET | `/api/v1/ai/status` | `settings.read` | Section 7 |
+| GET | `/api/v1/ai/stats` | `settings.read` | Section 7 |
+| POST | `/api/v1/ai/reembed` | `settings.write` | Section 7 |
+
+### Health probes
+
+These are an operational contract, not a product one, which is why they sit
+outside the module/permission model entirely.
+
+`GET /api/v1/health` is **liveness**: it touches nothing and answers
+`200 MBOS API is running`. If it fails the process is beyond serving traffic and
+the orchestrator should restart the container.
+
+`GET /api/v1/health/ready` is **readiness**: it issues `SELECT 1` and answers
+`200 {"status":"ok","db":"up"}`. On failure it returns `503`, rendered through the
+standard error envelope from 6.1 — `{ "error": { "code": "SERVICE_UNAVAILABLE",
+"message": ... } }` — because `ApiExceptionFilter` reshapes every `HttpException`
+and makes no exception for this route. Load balancers and the compose healthcheck
+gate traffic on this one, never on liveness: a liveness check that touched the
+database would restart the container on every brief Postgres hiccup, which the
+connection pool is designed to survive.
+
+Both are `@Public` because an orchestrator has no credentials, and both are free
+of tenant data for the same reason.
+
+### Why the AI routes are not specified here
+
+6.13 assigns AI endpoints to Section 7, and that still holds — but they are live
+now, so their absence from this document is a gap in Section 7 rather than a
+statement that they do not exist. Note that `GET /api/v1/search` and
+`GET /api/v1/dashboard/insights` are not AI-only: both degrade to a non-AI path
+when no provider is configured (FR-AI-01), so they serve requests in every
+deployment regardless of whether an AI key is present.

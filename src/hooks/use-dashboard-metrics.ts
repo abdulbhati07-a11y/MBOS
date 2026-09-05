@@ -3,138 +3,100 @@
 // ---------------------------------------------------------------------------
 // src/hooks/use-dashboard-metrics.ts
 //
-// Single source of truth for all dashboard-displayed numbers.
-// No dashboard widget reads mock data arrays directly — all derivations
-// happen here.
+// The dashboard's data, read from the live API (DEBT-032). Fires three gated
+// reads against the backend and hands the page their loading / error /
+// permission state.
 //
-// Products are received as a parameter (from ProductsContext) so the
-// dashboard reflects live inventory state, not the static MOCK_PRODUCTS
-// constant.
+// The three sections are gated on DIFFERENT permissions, because the dashboard is
+// visible to every role but its data is not: `sales` and `inventory` are readable
+// by a Cashier, `reports` (which powers every money total and the PO / supplier /
+// customer aggregates) is not. Each section therefore carries its own `canView`,
+// and its query is `enabled` only when the role may read it — a disabled query
+// never fires, so a Cashier's dashboard makes no request it would be refused.
+//
+// See `src/lib/api/dashboard/queries.ts` for the composition each snapshot does.
 // ---------------------------------------------------------------------------
 
-import { useMemo } from "react"
-import { OrderRecord } from "@/lib/mock-data/orders"
-import { MOCK_CUSTOMERS } from "@/lib/mock-data/customers"
-import { MOCK_SUPPLIERS } from "@/lib/mock-data/suppliers"
-import { MOCK_PURCHASE_ORDERS, PO_TRANSITIONS, POStatus } from "@/lib/mock-data/purchase-orders"
-import { ProductRecord } from "@/lib/mock-data/products"
-import { useProducts } from "@/contexts/products-context"
-import { useOrders } from "@/contexts/orders-context"
+import { useQuery } from "@tanstack/react-query"
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { useCanPerform } from "@/contexts/role-context"
+import { Modules, Actions } from "@/config/permissions"
+import {
+  dashboardKeys,
+  fetchSalesSnapshot,
+  fetchInventorySnapshot,
+  fetchBusinessSnapshot,
+  type SalesSnapshot,
+  type InventorySnapshot,
+  type BusinessSnapshot,
+} from "@/lib/api/dashboard/queries"
 
-export type POStatusBreakdown = {
-  status: POStatus
-  count: number
-  isTerminal: boolean
+export type { DashboardRecentOrder } from "@/lib/api/dashboard/queries"
+
+/**
+ * A gated dashboard section. When `canView` is false the section is hidden
+ * outright — the page must check it before reading `data`, `isPending` or
+ * `isError`, all of which describe a query that never ran.
+ */
+export interface DashboardSection<T> {
+  /** The role holds the permission this section's data requires. */
+  canView: boolean
+  isPending: boolean
+  isError: boolean
+  data: T | undefined
+  refetch: () => void
 }
 
-export type RecentOrderRow = {
-  id: string
-  orderNumber: string
-  date: string
-  customerName: string
-  customerId: string | null
-  total: number
-  status: OrderRecord["status"]
+export interface DashboardMetrics {
+  sales: DashboardSection<SalesSnapshot>
+  inventory: DashboardSection<InventorySnapshot>
+  business: DashboardSection<BusinessSnapshot>
 }
-
-export type DashboardMetrics = {
-  // Widget 1 — Open Purchase Orders by status
-  poStatusBreakdown: POStatusBreakdown[]
-  openPOCount: number
-
-  // Widget 2 — Suppliers
-  activeSupplierCount: number
-  totalSupplierCount: number
-
-  // Widget 3 — Sales / Orders
-  totalOrderCount: number
-  totalOrderValue: number
-  recentOrders: RecentOrderRow[]
-
-  // Widget 4 — Customers
-  activeCustomerCount: number
-  totalCustomerCount: number
-
-  // Widget 5 — Inventory health (live from ProductsContext)
-  totalProductCount: number
-  lowStockCount: number     // stock > 0 && stock <= reorderPoint
-  outOfStockCount: number   // stock === 0
-}
-
-// ---------------------------------------------------------------------------
-// Hook
-// ---------------------------------------------------------------------------
 
 export function useDashboardMetrics(): DashboardMetrics {
-  // Live products from shared context — reflects Inventory adjustments
-  const products = useProducts()
-  // Live orders from shared context — reflects POS-placed orders (DEBT-011 resolved)
-  const orders = useOrders()
+  const canReadSales = useCanPerform(Modules.SALES, Actions.READ)
+  const canReadInventory = useCanPerform(Modules.INVENTORY, Actions.READ)
+  const canReadReports = useCanPerform(Modules.REPORTS, Actions.READ)
 
-  return useMemo(() => {
+  const salesQuery = useQuery({
+    queryKey: dashboardKeys.sales(),
+    queryFn: ({ signal }) => fetchSalesSnapshot(signal),
+    enabled: canReadSales,
+  })
 
-    // ── Widget 1: Purchase Orders ──────────────────────────────────────────
-    const allStatuses: POStatus[] = ["Draft", "Sent", "Received", "Cancelled"]
-    const poStatusBreakdown: POStatusBreakdown[] = allStatuses.map((status) => ({
-      status,
-      count: MOCK_PURCHASE_ORDERS.filter((po) => po.status === status).length,
-      isTerminal: PO_TRANSITIONS[status].length === 0,
-    }))
-    const openPOCount = poStatusBreakdown
-      .filter((s) => !s.isTerminal)
-      .reduce((sum, s) => sum + s.count, 0)
+  const inventoryQuery = useQuery({
+    queryKey: dashboardKeys.inventory(),
+    queryFn: ({ signal }) => fetchInventorySnapshot(signal),
+    enabled: canReadInventory,
+  })
 
-    // ── Widget 2: Suppliers ────────────────────────────────────────────────
-    const activeSupplierCount = MOCK_SUPPLIERS.filter((s) => s.isActive).length
-    const totalSupplierCount = MOCK_SUPPLIERS.length
+  const businessQuery = useQuery({
+    queryKey: dashboardKeys.business(),
+    queryFn: ({ signal }) => fetchBusinessSnapshot(signal),
+    enabled: canReadReports,
+  })
 
-    // ── Widget 3: Sales / Orders ───────────────────────────────────────────
-    const totalOrderCount = orders.length
-    const totalOrderValue = orders.reduce((sum, o) => sum + o.total, 0)
-
-    const recentOrders: RecentOrderRow[] = [...orders]
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .slice(0, 5)
-      .map((o) => ({
-        id: o.id,
-        orderNumber: o.orderNumber,
-        date: o.date,
-        customerName: o.customerName,
-        customerId: o.customerId,
-        total: o.total,
-        status: o.status,
-      }))
-
-    // ── Widget 4: Customers ────────────────────────────────────────────────
-    const activeCustomerCount = MOCK_CUSTOMERS.filter((c) => c.isActive).length
-    const totalCustomerCount = MOCK_CUSTOMERS.length
-
-    // ── Widget 5: Inventory health ─────────────────────────────────────────
-    // Derived from live ProductsContext — matches the StatusBadge categories
-    // already used in the Inventory page (In Stock / Low Stock / Out of Stock)
-    const totalProductCount = products.length
-    const lowStockCount = products.filter(
-      (p) => p.stock > 0 && p.stock <= p.reorderPoint
-    ).length
-    const outOfStockCount = products.filter((p) => p.stock === 0).length
-
-    return {
-      poStatusBreakdown,
-      openPOCount,
-      activeSupplierCount,
-      totalSupplierCount,
-      totalOrderCount,
-      totalOrderValue,
-      recentOrders,
-      activeCustomerCount,
-      totalCustomerCount,
-      totalProductCount,
-      lowStockCount,
-      outOfStockCount,
-    }
-  }, [products, orders]) // re-derives when live product or order state changes
+  return {
+    sales: {
+      canView: canReadSales,
+      isPending: salesQuery.isPending,
+      isError: salesQuery.isError,
+      data: salesQuery.data,
+      refetch: () => void salesQuery.refetch(),
+    },
+    inventory: {
+      canView: canReadInventory,
+      isPending: inventoryQuery.isPending,
+      isError: inventoryQuery.isError,
+      data: inventoryQuery.data,
+      refetch: () => void inventoryQuery.refetch(),
+    },
+    business: {
+      canView: canReadReports,
+      isPending: businessQuery.isPending,
+      isError: businessQuery.isError,
+      data: businessQuery.data,
+      refetch: () => void businessQuery.refetch(),
+    },
+  }
 }

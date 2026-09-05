@@ -2,12 +2,16 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { Eye, EyeOff } from "lucide-react"
 
 import { loginSchema } from "@/lib/validation/auth"
+import { login, isMfaRequired } from "@/lib/api/auth/mutations"
+import { setPendingMfa } from "@/lib/api/auth/mfa-handoff"
+import { isApiError } from "@/lib/api/client"
 import { Button } from "@/components/ui/button"
 import {
   Form,
@@ -23,8 +27,36 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 
 type LoginFormValues = z.infer<typeof loginSchema>
 
+/**
+ * Turns a failed login into something worth reading.
+ *
+ * 401 is deliberately vague about *which* half was wrong — saying "no such
+ * email" would turn the login form into an account-enumeration oracle. 429 is
+ * surfaced with its wait, because the strict rate limit on this endpoint means a
+ * user retrying a typo can genuinely hit it.
+ */
+function loginErrorMessage(err: unknown): string {
+  if (!isApiError(err)) {
+    return "Could not reach the server. Check your connection and try again."
+  }
+  if (err.status === 401) return "Incorrect email or password."
+  if (err.status === 429) {
+    const wait = err.retryAfter
+    return wait
+      ? `Too many attempts. Try again in ${String(wait)} seconds.`
+      : "Too many attempts. Try again shortly."
+  }
+  return err.message
+}
+
 export default function LoginPage() {
   const [showPassword, setShowPassword] = React.useState(false)
+  const [formError, setFormError] = React.useState<string | null>(null)
+  const router = useRouter()
+  // Set by the reset-password page on success, so the return trip from the
+  // reset flow opens with a confirmation instead of a bare form.
+  const searchParams = useSearchParams()
+  const passwordReset = searchParams.get("reset") === "success"
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -35,9 +67,28 @@ export default function LoginPage() {
     },
   })
 
-  function onSubmit(data: LoginFormValues) {
-    // In the future, this will hit the real API
-    console.log("Login Form Submitted:", data)
+  // `rememberMe` is intentionally dropped rather than forwarded. LoginDto accepts
+  // only `email` and `password`, and the API's validation pipe runs with
+  // `forbidNonWhitelisted: true` — sending an extra field is a 422, not an
+  // ignored key. The control is left in place because session lifetime is a real
+  // requirement, but it has no backend yet, so honouring it would be a lie.
+  async function onSubmit({ email, password }: LoginFormValues) {
+    setFormError(null)
+    try {
+      const result = await login({ email, password })
+
+      if (isMfaRequired(result)) {
+        setPendingMfa({ mfaSessionToken: result.mfaSessionToken, email })
+        router.push("/mfa")
+        return
+      }
+
+      // `replace`, not `push`: the back button should not return to a login form
+      // the user has already cleared.
+      router.replace("/dashboard")
+    } catch (err) {
+      setFormError(loginErrorMessage(err))
+    }
   }
 
   return (
@@ -51,6 +102,14 @@ export default function LoginPage() {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {passwordReset && !formError && (
+          <div
+            role="status"
+            className="mb-4 rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-700 dark:text-green-400"
+          >
+            Password updated. Sign in with your new password.
+          </div>
+        )}
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
@@ -136,19 +195,28 @@ export default function LoginPage() {
               )}
             />
 
-            <Button 
-              type="submit" 
+            {formError !== null && (
+              <p
+                role="alert"
+                className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {formError}
+              </p>
+            )}
+
+            <Button
+              type="submit"
               className="w-full"
               disabled={form.formState.isSubmitting}
             >
-              Log in
+              {form.formState.isSubmitting ? "Logging in…" : "Log in"}
             </Button>
           </form>
         </Form>
       </CardContent>
       <CardFooter className="flex flex-col items-center justify-center space-y-2">
         <div className="text-sm text-muted-foreground">
-          Don't have an account?{" "}
+          Don&rsquo;t have an account?{" "}
           <Link
             href="/signup"
             className="font-medium text-primary hover:underline"

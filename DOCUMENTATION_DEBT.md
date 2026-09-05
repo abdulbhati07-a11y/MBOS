@@ -203,13 +203,18 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 **What needs to be written:** The architectural rule that all monetary values are stored as integers (cents/minor currency units) in the database and transmitted as integers in the API. The frontend's `toFixed(2)` display pattern is correct for presentation but is currently applied to JavaScript float values (e.g. `29.99`), not to integers divided by 100.
 
-**Current state:** Every monetary field in the frontend mock data (`price`, `cost`, `total`, `subtotal`, `taxAmount`, `unitPrice`, `unitCost`, `lineTotal`) is a JavaScript `number` typed as a float. When the real API is connected, all these values must become integers in cents (`price: 2999`, `taxAmount: 425`), and the presentation layer must divide by 100 before calling `toFixed(2)`.
+**Current state:** Every monetary field in the frontend mock data (`price`, `cost`, `total`, `subtotal`, `taxAmount`, `unitPrice`, `unitCost`, `lineTotal`) is a JavaScript `number` holding **major** units — rupees, e.g. `price: 1500` for Rs 1,500. The database and API hold **minor** units, integer paisa (`priceCents: 150000`). Both halves of the boundary now exist and are named so the mismatch is visible:
 
-**Impact:** All mock-data files will need updating at API integration time. All `toFixed(2)` call sites must change to `(value / 100).toFixed(2)`. Systematic, mechanical — not a design decision — but touches every monetary display in every module.
+- `src/lib/format/currency.ts` — `formatMoney` for major units (the mock-data path), `formatMoneyMinor` for the integer paisa the API sends, and `parseMoneyToMinor` for the write direction. All ~35 inline `` `${x.toFixed(2)}` `` sites were replaced with these during the PKR conversion.
+- `backend/src/common/validation/money.ts` — `IsMoneyMinor()` rejects non-integers and enforces the int4 ceiling on the way in.
 
-**Source:** `src/lib/mock-data/orders.ts`, `src/lib/mock-data/products.ts`, `src/lib/mock-data/purchase-orders.ts` — all monetary fields. NFR-14 (fixed-point arithmetic requirement). Identified during Section 4 documentation review.
+**Impact:** Reduced from "touches every monetary display in every module" to a per-module swap. When a module moves off mock data, its display calls change from `formatMoney` to `formatMoneyMinor` and its writes go through `parseMoneyToMinor`. Note what is explicitly *not* the fix: dividing by 100 at each call site (`(value / 100).toFixed(2)`, as an earlier revision of this entry proposed) reintroduces float arithmetic on exact amounts one site at a time. `formatMoneyMinor` splits whole from fractional paisa with integer arithmetic instead.
 
-**Status:** Open — deferred to backend integration phase
+**What remains:** the mock-data files still hold major units, and the swap has not happened for any module — that is the backend-integration work itself, not debt. `parseMoneyToMinor` has no call sites yet; it exists so the first person wiring Section 6.7 does not write `Math.round(price * 100)`, which is wrong for real prices (`8.115 * 100` is `811.4999999999999`). It is also untested: the frontend has no test runner (root `package.json` has only `dev`/`build`/`start`/`lint`), so adding one is a prerequisite for covering it.
+
+**Source:** `src/lib/mock-data/orders.ts`, `src/lib/mock-data/products.ts`, `src/lib/mock-data/purchase-orders.ts` — all monetary fields. NFR-14 (fixed-point arithmetic requirement). Identified during Section 4 documentation review. Related: [DEBT-023] (the `*Cents` names), [DEBT-024].
+
+**Status:** Open — deferred to backend integration phase. The conversion boundary is built and documented; the per-module swap is not done.
 
 ---
 
@@ -231,7 +236,7 @@ A true ledger requires: `Invoice`, `Payment`, and `Balance` entities in the back
 
 **Source:** Section 6.1 rate-limiting subsection. Section 2 NFR list. `backend/src/rate-limit/rate-limit.config.ts`, `backend/src/main.ts` (`resolveTrustProxy`), `backend/.env.example`. Thresholds and proxy-trust posture resolved during the DEBT-013 close.
 
-**Status:** Resolved — thresholds and proxy-trust setting decided and implemented; interim values replaced (not left alongside). Sections 6.1 and 2-NFR still need the prose updated to match these numbers, tracked as ordinary doc-sync, not an open decision.
+**Status:** Resolved — thresholds and proxy-trust setting decided, implemented, and now written into `docs/section-6-api-design.md` §6.1 (the three ceilings, burst-is-additive, the env override per threshold, and proxy trust as part of the same decision). Interim values were replaced rather than left alongside. §6.12 lists this as resolved rather than deferred. Section 2's NFR list still needs the same numbers — ordinary doc-sync, not an open decision.
 
 ---
 
@@ -328,7 +333,13 @@ This resolves each of the three problems above:
 
 **Source:** `docs/section-6-api-design.md` §6.2 lines 107–160 and §6.1 lines 82–104. `backend/src/common/guards/api-access.guard.ts`, `backend/src/access-control/access-control.decorators.ts`, `backend/src/rate-limit/rate-limit.guard.ts`. Identified while implementing chain steps 2, 5 and 6.
 
-**Status:** Open — both behaviours implemented and commented in code; Section 6.2 needs amending so the contract is documented rather than inferred from the implementation.
+**Resolved by:** `docs/section-6-api-design.md` §6.2, which gained three subsections and two amended chain steps:
+
+- the chain diagram now shows `2a. Rate Limiter — per IP (pre-auth)` and `2b. Rate Limiter — per tenant (post-auth)` in their real positions, with "Why the rate limiter is split" explaining that §6.1's per-tenant limit and a single pre-auth step are not simultaneously satisfiable because `tenantId` does not exist until step 3 has validated the JWT;
+- steps 5 and 6 now state the fail-closed default explicitly, and "The default for a route that declares no module or action" gives the reasoning (fail-open turns a forgotten decorator into an unguarded endpoint; fail-closed turns it into a test failure) plus a table of `@NoModuleRequired()`'s two current users — `GET /auth/me`, where a permission gate would be circular, and `GET /search`, which filters per-module inside the handler and returns an empty section rather than a 403;
+- "The chain's order is guaranteed, not incidental" records that steps 2–6 are sequenced inside one guard (`backend/src/common/guards/api-access.guard.ts`) rather than four independently-registered globals relying on provider-resolution order.
+
+**Status:** Resolved — both behaviours documented in §6.2 rather than inferable only from the implementation.
 
 ---
 
@@ -339,7 +350,7 @@ This resolves each of the three problems above:
 **What needs to be written:** Four things `PATCH /billing/modules` depends on that no section defines.
 
 1. **FR-BILL-02 does not exist.** Section 6.10 says `effectiveDate` "is used to calculate proration per FR-BILL-02", but that identifier appears exactly once in the repository — in that sentence. There is no proration rule to implement: no statement of whether a mid-period enable is charged from the effective date or the period start, whether a disable refunds or credits, or how partial months round.
-2. **No per-module price exists in the schema.** Section 6.10's example returns `proratedChargeCents: 1250` for enabling `clinic`, but `Plan` prices a whole plan (`priceMonthly`, `priceAnnual`) and `PlanModule` is `{planId, moduleKey}` with no price column. Nothing in Section 5 records what an individual module costs, so the figure cannot be derived from stored data at all.
+2. **No per-module price exists in the schema.** Section 6.10's example returns `proratedChargeCents: 125000` (Rs 1,250) for enabling `clinic`, but `Plan` prices a whole plan (`priceMonthly`, `priceAnnual`) and `PlanModule` is `{planId, moduleKey}` with no price column. Nothing in Section 5 records what an individual module costs, so the figure cannot be derived from stored data at all.
 3. **No invoice to apply a charge to.** The specified message says the charge "will be applied to your next invoice", but Section 6.13 explicitly places the financial ledger (Invoice, Payment, CreditNote) out of scope, deferred to Sections 8/9 (DEBT-010). Even a correctly computed charge would have nowhere to go.
 4. **Where the pending change lives is unstated.** Section 6.10 requires a confirmation step before committing, but names no entity to hold an unconfirmed change.
 5. **`TenantModuleSubscription` cannot express more than one subscription period.** It has a single `enabledAt`/`disabledAt` pair, and Section 5.3 defines enabling as exactly "sets `disabledAt = NULL` on an existing row" — so after a disable/re-enable cycle `enabledAt` still reports the *first* time the module was ever switched on, not the start of the current period. `GET /billing/modules` therefore returns an `enabledAt` a client would misread as "enabled since". The implementation follows Section 5.3 literally rather than quietly overwriting the column. Prorating a mid-period change needs the current period's start, so this is a second, independent reason the charge cannot be derived from this table; a `TenantModuleSubscriptionPeriod` history (or an `enabledAt` that is documented as re-stamped) would fix it.
@@ -401,10 +412,692 @@ Three candidate resolutions, in decreasing order of disruption:
 
 **Risk if left open:** the plan lists are the most likely thing a future implementer would wire access control to, precisely because they *look* like an entitlement list. D-03 says they are not. A contract test or an explicit comment on `SEED_PLANS` would make the trap visible at the call site.
 
-**Source:** `backend/src/access-control/access-control.constants.ts` (`SEED_PLANS`, `CORE_MODULE_KEYS`), `backend/prisma/schema.prisma` (`Plan`, `PlanModule`, `TenantModuleSubscription`). Surfaced while reconstructing Section 1.5.1. Related: [DEBT-016], [DEBT-018], [DEBT-019].
+**Source:** `backend/src/access-control/access-control.constants.ts` (`SEED_PLANS`, `CORE_MODULE_KEYS`), `backend/prisma/schema.prisma` (`Plan`, `PlanModule`, `TenantModuleSubscription`). Surfaced while reconstructing Section 1.5.1. Related: [DEBT-016], [DEBT-018], [DEBT-019], [DEBT-023].
 
 **Status:** Open — product decision required (which of the three options). No option adopted; §1.5.1 records all three and states that the choice is product's. Nothing in code changed on account of this entry.
 
+**Note (PKR conversion):** `SEED_PLANS` no longer carries Section 6.10's literal figures. The example's 1900/4900 are US dollars, and the product is priced in PKR ([DEBT-023]), so the seed now holds Starter at Rs 4,999/month (`499_900` paisa) and Growth at Rs 12,999/month (`1_299_900`), with annual terms keeping the example's twelve-months-for-ten shape. These are FX conversions at roughly 280 PKR/USD rounded to publishable price points — **placeholders, not a pricing decision**, and this entry plus [DEBT-019] are still where the real one belongs. Two e2e assertions in `billing.controller.spec.ts` read the seeded prices, so whoever sets the real numbers changes them there too.
+
 ---
+
+### DEBT-021 — Sidebar gates industry modules on a permission, not a subscription
+
+**Where it needs to land:** `src/hooks/use-permissions.ts` (`useModuleAccess`), `src/components/shared/Sidebar.tsx`, and Section 4.5 (the frontend access-control description)
+
+**What needs to be written:** `useModuleAccess(moduleKey)` is implemented as `useCanPerform(moduleKey, Actions.READ)` — a **role-permission** check. But whether an industry module is available is a **subscription** question, answered by `TenantModuleSubscription` and nothing else (D-03, FR-BILL-03). The two are independent gates (Section 3.2), and the hook conflates them under a name that claims to answer the second.
+
+The consequence is visible today. The dev tenant subscribes to **zero** industry modules (`DEV_TENANT_ENABLED_INDUSTRY_MODULES` is deliberately empty), yet an Owner holds `clinic.read`, `pharmacy.read` and `restaurant.read` from the canonical matrix — so the sidebar renders all three. Every one of them leads to a module the API refuses with 403 at chain step 5. The frontend advertises what the backend denies.
+
+Core modules are unaffected: they are never subscription-gated (DEBT-016), so for them a permission check is the whole story and `useModuleAccess` is accidentally correct.
+
+**What the fix requires:**
+
+1. A real source of subscription state — `GET /api/v1/billing/modules` already returns exactly this (implemented, Section 6.10), keyed by module with an `enabled` boolean.
+2. Splitting the hook in two, so the names stop lying: `useCanPerform(module, action)` for RBAC and a separate `useModuleEnabled(module)` for subscription, with nav visibility requiring **both** for industry keys and permission alone for core keys.
+3. A decision on the UX for a subscribed-but-unpermitted vs unsubscribed module — hide the item, or show it disabled with a route to Billing. Showing it disabled is the better upsell path and matches what the placeholder pages now say; hiding is less confusing. Not decided.
+
+**Blocked on:** the frontend API client. `src/` currently makes no HTTP calls at all — no `fetch`, no `axios`, no `api/v1` reference anywhere — so there is no way to read subscription state yet. This lands with the frontend integration phase, alongside [DEBT-006].
+
+**Interim state:** the five previously-404ing routes now have real pages (commit `41f376f`), and the three industry pages state plainly that the module is a subscription-gated add-on that is not enabled. So the misleading nav item now leads to an honest explanation instead of a 404 — the symptom is contained, the gating bug is not fixed.
+
+**Source:** `src/hooks/use-permissions.ts` (`useModuleAccess`), `src/config/nav.ts` (industry group), `src/components/shared/Sidebar.tsx`. Found while fixing the 404 routes. Related: [DEBT-006], [DEBT-016].
+
+**Status:** Open — frontend correctness gap; the backend behaves correctly and refuses these modules. Blocked on the frontend API client.
+
+---
+
+### DEBT-022 — `DELETE /products/:id` is specified so that no product a business has ever sold can be deleted
+
+**Where it needs to land:** Section 6.6 (`DELETE /products/:id`), and Section 3.x wherever the product lifecycle is described
+
+**What needs to be written:** Section 6.6 specifies that `DELETE /products/:id` returns **409** if the product appears on any `OrderLine` or `POLine`. Implemented as written (`ProductsService.remove`), and tested as written. But the rule makes the endpoint unusable for its actual purpose:
+
+- The products a business wants to remove from its catalogue are, by definition, the ones it has stopped selling — which means they have sold. A product with **no** line history is one that was created by mistake and never traded, which is the only case the endpoint now serves.
+- So the ordinary "discontinue this item" operation has no endpoint. The only way to get a product out of the catalogue is `PATCH { isActive: false }`, which happens to work but is not what the spec presents as the removal path.
+
+The history the 409 protects is **already safe without it**, twice over:
+
+1. Delete here is a soft delete (`deletedAt`), so the product row survives and every `OrderLine.productId` / `POLine.productId` FK still resolves. Nothing is orphaned.
+2. Both line tables carry a denormalised `productNameSnapshot` precisely so a historical document renders correctly even if the product is renamed or removed (the same pattern as `Supplier.supplierNameSnapshot`, DEBT-003).
+
+A hard delete would need this guard. A soft delete does not, and the guard is what is specified.
+
+**What the fix requires — one of:**
+
+1. **Drop the 409** and let `DELETE` soft-delete regardless of history. Simplest, and consistent with how customers and suppliers already behave (neither checks history, for exactly this reason: the row survives).
+2. **Keep the 409 but rename the operation** in the spec, so it reads as "delete a product created in error" rather than the general removal path, and document `PATCH { isActive: false }` as the discontinue path alongside it.
+3. **Add an explicit discontinue endpoint** (`POST /products/:id/discontinue`) so intent is recorded in the audit trail rather than inferred from an `isActive` flip. Most work; most honest about what the user meant.
+
+Option 1 is the recommendation. Option 2 is the minimum — the current text describes a general-purpose delete that in practice refuses almost every real call.
+
+**Interim state:** implemented per spec, not per this objection. The 409's message names `PATCH { isActive: false }` explicitly so a caller who hits it is not left without a way forward, and `products.e2e.spec.ts` asserts both the 409 and that the deactivate alternative still succeeds — so if the rule is dropped later, the test that changes is the one that documents this decision.
+
+**Source:** `backend/src/products/products.service.ts` (`remove`, and the header comment), `backend/src/products/products.e2e.spec.ts` ("answers 409 for a product that appears on an order line"). Found while implementing Section 6.6. Related: [DEBT-003].
+
+**Status:** Open — spec objection, raised rather than silently overridden. Needs a product/spec decision between the three options above.
+
+---
+
+### DEBT-023 — Every money column is named `*Cents` and the currency is the Pakistani rupee
+
+**Where it needs to land:** Section 5.10 (naming conventions), Section 5.4 and every model in Section 5 carrying a money column, and NFR-14
+
+**What needs to be written:** The currency is PKR — `TenantSettings.currencyCode` now defaults to `"PKR"` (migration `20260824042604_pkr_default_currency`, backfilled by `20260824042700_backfill_pkr_currency`). Amounts are stored as integer **paisa**, 1/100 of a rupee: `Rs 2,999` is `299900`.
+
+Section 5.10 mandates the suffix `*Cents` for monetary columns, so the schema now says `priceCents`, `costCents`, `subtotalCents`, `totalCents`, `unitPriceCents`, `lineTotalCents`, `priceMonthly`/`priceAnnual` (documented as cents), and `proratedChargeCents` — none of which hold cents. They hold minor units of whatever `currencyCode` says, which for every tenant this product is being built for is the paisa.
+
+This is a naming problem, not a behavioural one. The columns are already correct: `Int`, minor units, no floats (DEBT-012). Nothing computes wrongly. What is wrong is that a developer reading `subtotalCents` has to know the name is a lie, and the natural mistakes it invites are expensive — writing rupees into a paisa column is a 100× error, and it lands in a record BR-03 then forbids editing.
+
+Why the rename was **not** done as part of the PKR change:
+
+1. `*Cents` is what Section 5.10 specifies. Renaming the columns while the convention still says "cents" replaces one inconsistency with a different one and makes the code contradict the design document instead of merely being awkwardly named. The document has to move first.
+2. The surface is wide and financial: every money column across `Product`, `Order`, `OrderLine`, `RefundTransaction`, `PurchaseOrder`, `POLine` and `Plan`, plus the `GET`/`POST` wire shapes in Sections 6.6, 6.7, 6.9 and 6.10, the billing DTOs, and a migration. A rename of that size belongs in one deliberate change, not smuggled into a currency default.
+3. Sections 6.7–6.9 are specified but not yet implemented (`docs/section-6-api-design.md`), and they add more money fields: `subtotalCents`, `taxAmountCents`, `totalCents`, `unitPriceCents`, `amountCents` on orders and refunds, `unitCostCents` on PO lines. Renaming now and again after those land is two breaking passes over the API.
+
+**What the fix requires:**
+
+1. A decision on the replacement suffix. `*Minor` (`priceMinor`, `subtotalMinor`) is currency-neutral and stays correct if a tenant is ever configured for a currency with a different minor unit. `*Paisa` is more readable but hard-codes PKR into column names, which contradicts `currencyCode` being a per-tenant setting at all.
+2. Section 5.10 amended first, then the schema, then the wire shapes — in that order, so the code is never the thing that disagrees with the document.
+3. Best sequenced **after** Section 6.9, so orders, adjustments and purchase orders are renamed in the same pass rather than added under the old name and renamed later.
+
+**Interim state:** the *names* still say cents; everything a caller actually reads says paisa. `common/validation/money.ts` exports `MAX_MONEY_MINOR`, `MONEY_MESSAGE` and `IsMoneyMinor()`, and its 422 message reads "must be a whole number of paisa — send 299900 for Rs 2,999", so an API consumer who sends the wrong unit is told the right one in the right currency. The schema header, the money DTO doc comments and the billing wire shapes all state that the suffix is a Section 5.10 leftover and point here. So the misleading name is annotated everywhere it appears rather than silently carried.
+
+**Source:** `backend/src/common/validation/money.ts` (the NAMING paragraph), `backend/prisma/schema.prisma` (header, Section 5.10 conventions block), `backend/src/billing/dto/billing-response.dto.ts`, `backend/src/customers/dto/customer.dto.ts`, `backend/src/suppliers/dto/supplier.dto.ts`. Raised while converting prices to PKR. Related: [DEBT-012], [DEBT-024].
+
+**Status:** Open — naming vs. Section 5.10; deliberately deferred, not overlooked. Blocked on the Section 5.10 amendment and best done after Section 6.9.
+
+---
+
+### DEBT-024 — `PATCH /settings { currencyCode }` reinterprets financial history instead of converting it
+
+**Where it needs to land:** Section 6.4 (`PATCH /settings`), Section 5.4 (`TenantSettings.currencyCode`), and C-01
+
+**What needs to be written:** `currencyCode` is a freely writable tenant setting — Section 6.4 lists it in the PATCH body with no more qualification than a shape rule (ISO 4217). But every money column stores minor units of *that* currency and nothing else records what a stored integer meant when it was written. So changing the code changes the meaning of every existing row without touching its digits: a tenant with `totalCents: 299900` reading as `Rs 2,999.00` becomes one reading `$2,999.00` the moment an Owner picks USD in the settings form. Order totals, refunds and purchase orders all shift by the exchange rate at once, silently, through a 200 response.
+
+BR-03 makes this worse rather than better: the financial records whose meaning just changed are the ones that may not be edited afterwards.
+
+Section 6.4 does not say what changing the currency means, and there is no conversion endpoint anywhere in Section 6. C-01 ("one currency per tenant") is the closest thing to a rule, and read strictly it implies the currency is a setup-time choice — but nothing in the API enforces that reading.
+
+**What the fix requires — one of:**
+
+1. **Make it setup-only.** Reject the field in `PATCH /settings` once the tenant has any row in `Order`, `RefundTransaction` or `PurchaseOrder` — a 409 naming the reason. Cheapest, and matches how C-01 reads. A tenant that genuinely mis-set its currency before trading can still fix it.
+2. **Define a conversion operation.** A dedicated endpoint that takes a rate, converts every money column in one transaction, and writes an audit record of the rate and the operator. Correct, considerably more work, and needs a decision on how BR-03 tolerates a bulk rewrite of frozen records.
+3. **Store the currency per financial record** (`Order.currencyCode` and so on), so history keeps the currency it was written in and only new records use the new setting. Most faithful to what multi-currency actually means, and the largest schema change.
+
+Option 1 is the recommendation, and it is a guard rather than a feature: it stops the silent case without committing the product to multi-currency.
+
+**Interim state:** nothing enforced. The DTO comment on `currencyCode` states plainly that changing it reinterprets rather than converts, and that Section 6.4 defines no conversion path, so the hazard is documented at the point of change. `settings.e2e.spec.ts` covers the shape rules only — a currency name (`'Rupees'`) and a display symbol (`'Rs'`) are both 422 — not the history question, which needs Section 6.7 order fixtures to test.
+
+**Source:** `backend/src/settings/dto/update-settings.dto.ts` (`currencyCode`), `backend/prisma/schema.prisma` (`TenantSettings`). Raised while converting prices to PKR. Related: [DEBT-023], [DEBT-012].
+
+**Status:** Open — real data-integrity hazard reachable through a specified endpoint today. Needs a product decision; option 1 is implementable now.
+
+---
+
+### DEBT-025 — Section 6.7 says a client-submitted order total is "silently ignored"; the API refuses it with `422`
+
+**Where it needs to land:** Section 6.7 (`POST /orders`, "Server-computed fields"), and Section 6.1's validation conventions
+
+**What needs to be written:** Section 6.7 states: "If client-submitted totals are present in the body, they are silently ignored." The implementation does the opposite. `CreateOrderDto` does not declare `subtotalCents`, `taxAmountCents` or `totalCents`, and the global `ApiValidationPipe` runs with `forbidNonWhitelisted: true`, so a body carrying any of them is rejected with a `422` naming the offending field. Same for `unitPriceCents` on a line.
+
+The departure is deliberate, and the reason is BR-03. A silent ignore answers `201 Created` to a client that submitted `totalCents: 5000`. That client has no way to distinguish "we accepted your total" from "we discarded it and computed our own", and the natural reading of a `201` is the first one. The record it just created is a financial transaction that BR-03 forbids editing afterwards — so the one place the API should be loudest about a misunderstanding is the one place the section asks it to be silent.
+
+Refusing is also what the rest of the codebase already does with a server-owned field: `PATCH /products/:id` does not accept `stock`, and a client that sends it gets a `422` rather than a `200` that quietly dropped it (Section 6.6, line 403). Making orders the single exception would mean the money path is the *least* strict surface in the API.
+
+**A second, smaller mismatch in the same section:** Section 6.7 says that after `status = 'Completed'`, the financial columns are locked and "any attempt to modify them returns `409`". No route exists through which to attempt it — there is no `PATCH /orders/:id`, and `PATCH /orders/:id/status` accepts only `{ "status": "Completed" }`. So the lock is structural rather than a runtime check, and a client that tries gets `404` (no such route) or `422` (unrecognised field), never the `409` the section promises. The guarantee holds; the status code in the document does not describe any reachable response.
+
+**What the fix requires:** amend Section 6.7 to specify the refusal — `422` with the field named — and drop "silently ignored". Then correct the `409` claim to describe the absence of a write route, or specify a route that would produce the `409` (there is no reason to add one).
+
+**Interim state:** the departure is annotated at both the code and the test. `backend/src/orders/dto/order.dto.ts` states it in the file header with the BR-03 reasoning; `orders.e2e.spec.ts` asserts the `422` for each of the three total fields and for `unitPriceCents`, with a comment pointing here. So the behaviour is pinned by tests and the divergence is discoverable from either side.
+
+**Source:** `backend/src/orders/dto/order.dto.ts` (header, items 1 and 2), `backend/src/orders/orders.e2e.spec.ts` (the `it.each` over the three total fields), `docs/section-6-api-design.md` §6.7. Raised while implementing Section 6.7. Related: [DEBT-026], [DEBT-027].
+
+**Status:** Open — implemented behaviour deliberately contradicts the section's wording. Needs the section amended, not the code.
+
+---
+
+### DEBT-026 — Completing an order moves stock, and Section 6.7 does not say so
+
+**Where it needs to land:** Section 6.7 (`PATCH /orders/:id/status`), cross-referenced from FR-SALE-04, BR-02 and Section 6.8
+
+**What needs to be written:** Section 6.7 describes the completion transition purely as a status change: "Transitions `Order.status` from `Pending` to `Completed`." It says nothing about inventory. FR-SALE-04 and BR-02 do: completing a sale decrements the stock of every product sold, and stock only ever changes through an audited writer. The requirement wins over the section's silence, so `PATCH /orders/:id/status` does considerably more than the section describes:
+
+1. Re-reads the order **inside** the transaction and refuses with `409` unless it is still `Pending`, so two concurrent completions cannot both take stock.
+2. Sums quantities **per product** across the lines first — the same product may appear on two lines, and decrementing each line separately would under-count.
+3. Decrements `Product.stock` for each product, then asserts the returned value is `>= 0` and rolls the whole transaction back if not.
+4. Writes one `StockAdjustment` per product (`type: 'REMOVE'`, `reasonCode: 'Sale'`, `quantityDelta` negative, `newStockLevel` taken from what the update returned, `createdByUserId` from the request context), so BR-02's audit trail covers sales and not just manual adjustments.
+5. Sets `status = 'Completed'` last.
+
+All five happen in one `$transaction`. That matters for the failure case, which the section also does not specify: **an order whose lines exceed available stock cannot be completed, and the attempt returns `409` with nothing changed** — stock intact, order still `Pending`, no adjustment rows written. The alternative was to allow the decrement to go negative and let a stock-take correct it later, which was rejected: a negative count is not a state any report in Section 6.9 can interpret, and BR-03 does not apply here (an uncompleted order is not yet a posted transaction), so refusing costs nothing that allowing would preserve.
+
+The section needs to state the side effect, the ordering, the `409` on insufficient stock, and the `409` on a non-`Pending` order — because a client that reads only §6.7 has no reason to expect that a status change can fail for an inventory reason.
+
+**Interim state:** implemented and covered. `orders.e2e.spec.ts` asserts the decrement, the single `Sale` adjustment row, the two-lines-one-product aggregation, the insufficient-stock `409` with all three no-change assertions, and the double-completion `409` proving stock is not taken twice. The service header names FR-SALE-04 as the authority that overrides the section's silence.
+
+**Source:** `backend/src/orders/orders.service.ts` (`updateStatus`, and the service header's third bullet), `backend/src/orders/orders.e2e.spec.ts`. Raised while implementing Section 6.7. Related: [DEBT-025], [DEBT-027], [DEBT-002].
+
+**Status:** Open — code implements a requirement the API section omits. Needs Section 6.7 amended to match FR-SALE-04.
+
+---
+
+### DEBT-027 — Section 6.7's refund endpoint has no upper bound, no status precondition, and no stated effect on stock
+
+**Where it needs to land:** Section 6.7 (`POST /orders/:id/refund`), cross-referenced from BR-03 and Section 6.8's `Returned` reason code
+
+**What needs to be written:** Section 6.7 says partial refunds are allowed, repeated refunds are allowed, and `status = 'Refunded'` means "at least one refund exists — not necessarily fully refunded." It does not say what bounds any of it. Three questions the implementation had to answer:
+
+1. **How much can be refunded in total?** The sum of an order's refunds is capped at `Order.totalCents`. A refund of more than was charged is not a refund, and BR-03 leaves no way to correct one after the fact. Each request aggregates `RefundTransaction.amountCents` for the order and refuses with `409` if the new amount exceeds what remains, naming the remaining figure. Without this, repeated partial refunds have no ceiling at all — "multiple refunds are permitted" read literally allows refunding an order indefinitely.
+2. **Can a `Pending` order be refunded?** No — `409`. A `Pending` order has taken no money and moved no stock, so there is nothing to reverse. An already-`Refunded` order *stays* refundable, because that is exactly the partial-refund case the section does allow.
+3. **Does a refund restore stock?** No, deliberately. A v1 `RefundTransaction` is an order-level amount with no line attribution — the model has no `OrderLine` FK, which Section 5.11 defers to v2 — so the server cannot know which goods came back or how many. Inferring a quantity from the amount would corrupt the count BR-02 exists to keep honest. Goods physically returned are booked through `POST /inventory/adjustments` with `reasonCode: 'Returned'` (§6.8), which is why that reason code exists as something distinct from `Sale`. The section should say this outright, because "creates a `RefundTransaction` and sets status" reads as though the reversal is complete, and an implementer of the frontend refund flow needs to know a second action is required.
+
+**What the fix requires:** state the three rules in §6.7 with their status codes, and add the pointer to §6.8's `Returned` path so the money reversal and the goods reversal are documented as two steps rather than one.
+
+**Interim state:** all three implemented inside one `$transaction` and covered by `orders.e2e.spec.ts` — accumulating partial refunds, the overshoot `409`, the `Pending` `409`, and an assertion that stock is unchanged after a refund. The service's `refund` doc comment carries the reasoning for the stock decision and names the `Returned` alternative.
+
+**Source:** `backend/src/orders/orders.service.ts` (`refund` — the doc comment and the two `ConflictException`s), `backend/src/orders/orders.e2e.spec.ts`. Raised while implementing Section 6.7. Related: [DEBT-025], [DEBT-026].
+
+**Status:** Open — under-specified endpoint; the code chose bounds the section leaves open. Needs Section 6.7 amended to record them.
+
+---
+
+### DEBT-028 — `quantityDelta` means three different things, and Section 6.8 documents only one of them
+
+**Where it needs to land:** Section 6.8 (`POST /api/v1/inventory/adjustments`), cross-referenced from Section 5's `StockAdjustment` model and from Section 6.7's completion path
+
+**What needs to be written:** The field carries three distinct meanings, and a reader of §6.8 can only work out one of them:
+
+1. **On the wire, for `ADD`/`REMOVE`, it is an unsigned magnitude and `type` carries the sign.** §6.8's own request example is `{"type": "REMOVE", "quantityDelta": 5}` — positive five, on a removal — so this reading is at least implied by the example. A client never sends a negative number; one that tries is refused with `422`.
+2. **In the column it is signed.** That same request stores `-5`. The schema comment says so ("positive for ADD/COUNT increase; negative for REMOVE"), and Section 6.7's completion path already writes it that way (`quantityDelta: -quantity`) so both writers of `Product.stock` agree. §6.8 never mentions the conversion, so read on its own it says the stored value is `5` — which would make the audit log sum to the opposite of the truth.
+3. **For `COUNT` it is neither** — it is the absolute new stock level, and the stored delta is `quantityDelta - currentStock`, which may be negative, positive or zero. §6.8 *does* state this one, and it is the reason a bare `@Min(1)` would be wrong: a stock take may legitimately find an empty shelf, so `0` is a valid `COUNT`.
+
+The hazard is specifically in (2), because an implementation that gets it backwards still returns plausible responses. A `newStockLevel` of `5` after removing `5` from `10` is correct whichever sign was stored; the error surfaces only later, when someone sums `quantityDelta` over a date range to reconcile shrinkage and gets a number with the wrong sign.
+
+**There is also a frontend field-name seam.** `src/components/inventory/StockAdjustmentDialog.tsx` sends a field named **`quantity`** (positive magnitude), not `quantityDelta`. The API refuses `quantity` outright — `forbidNonWhitelisted` makes an unknown property a `422` — so the mock-data swap for the Inventory module must rename the field at the boundary. That is a genuine rename rather than a formatting difference, and it is the kind of mismatch discovered at runtime rather than at compile time, because the dialog's form state is local and not typed against the API.
+
+**What the fix requires:** state all three readings in §6.8 in the terms above, say explicitly that the server converts the wire magnitude into a signed column value, and note that a client-sent negative is a `422`. Then either rename the dialog's field to `quantityDelta` or record the mapping in whatever API-client layer the swap introduces.
+
+**Interim state:** implemented and covered. `backend/src/inventory/dto/inventory.dto.ts` carries the three readings in its header comment as the current best description, and `inventory.e2e.spec.ts`'s `quantityDelta sign` and `COUNT` blocks assert the **stored** value directly — not just the response — including the negative, positive and zero `COUNT` deltas. The frontend still sends `quantity`; nothing was changed there, because that dialog is still driven by mock data.
+
+**Source:** `backend/src/inventory/dto/inventory.dto.ts` (header comment), `backend/src/inventory/inventory.service.ts` (`create`), `backend/src/inventory/inventory.e2e.spec.ts`, `src/components/inventory/StockAdjustmentDialog.tsx`. Raised while implementing Section 6.8. Related: [DEBT-012], [DEBT-026].
+
+**Status:** Open — the section documents one of three meanings of its own field. Needs §6.8 amended; the code is correct and tested.
+
+---
+
+### DEBT-029 — Section 6.8 says how an adjustment succeeds and never says how one is refused
+
+**Where it needs to land:** Section 6.8 (`POST /api/v1/inventory/adjustments`, and a note on `GET /api/v1/inventory/alerts`)
+
+**What needs to be written:** §6.8 describes the happy path in three sentences and specifies exactly one status code (`201`). Five refusals and one structural property had to be decided in code:
+
+1. **Insufficient stock is `409`, with nothing changed.** PROV-BR-07 (stock may not go negative) is enforced server-side; the message names the quantity actually available. `StockAdjustmentDialog.tsx:75` already checks it, but that is a UX affordance, not a guarantee — the same client-affordance-versus-guarantee split DEBT-002 draws for PO transitions. Note this binds `REMOVE` only: `COUNT` is absolute, so counting `1` against a believed `100` is a legitimate stock take, not a conflict.
+2. **`Sale` and `PurchaseReceived` are not client-submittable — `422`.** The column permits six reason codes; a client may send four (`Received`, `Returned`, `Damaged`, `Correction`). The other two are written by the system when an order completes (§6.7) or a PO is received (§6.9). Accepting them here would let a user file a sale-shaped audit row with no order behind it, which defeats the reconciliation the audit log exists to make possible. §6.8 never enumerates the set at all — its example just happens to use `Damaged`.
+3. **A zero-quantity `ADD` or `REMOVE` is `422`.** It changes nothing and would leave a meaningless row in an append-only log. Zero is accepted for `COUNT`, where it means the shelf is empty (see DEBT-028).
+4. **A bad `productId` or `branchId` in the body is `422`, not `404`.** The addressed resource is the adjustment collection, which exists; the body is what is wrong — the same reading `users.service.ts` takes for a bad `roleId`. A soft-deleted product or branch is refused the same way, but an **inactive** product is still adjustable, because a retired product line's remaining stock still has to be written off.
+5. **A single adjustment is capped, and so is the resulting level.** `Product.stock` is `int4`, so an `ADD` that would carry it past 2,147,483,647 is `422` rather than a Postgres overflow, and one adjustment is bounded at 1,000,000 units — a figure above that is far likelier to be a misplaced decimal point than a delivery, and unlike an order an adjustment can be corrected afterwards, so refusing costs the operator little.
+6. **The log is append-only.** There is no `PATCH` and no `DELETE` on an adjustment, and no service method for either; a wrong adjustment is corrected by filing a compensating one. That is what keeps the log a history rather than a mutable opinion about the current count (BR-02). §6.8 does not say it, so the absence reads as an oversight rather than a decision — §6.7 makes the equivalent point explicitly under "No DELETE /api/v1/orders/:id", which is the pattern to follow.
+
+**Also worth a line:** `GET /inventory/alerts` caps each array at 200 and orders `lowStock` scarcest-first, so a truncated list drops the least urgent rather than an arbitrary tail. The two buckets §6.8 already defines are disjoint, which is deliberate and differs from `GET /products?lowStock=true`'s looser `stock <= reorderPoint` — right for a filter, wrong for a widget that shows both counts side by side and would otherwise double-report a product sitting at zero.
+
+**What the fix requires:** add a refusals list to §6.8 with the status codes above, enumerate the client-submittable reason codes and name the two that are system-only, and add a "No PATCH or DELETE on an adjustment" subsection in the shape §6.7 already uses for orders.
+
+**Interim state:** all six implemented; `inventory.e2e.spec.ts` covers each, including that a refused adjustment leaves no audit row and no stock change, that an inactive product is still adjustable while a soft-deleted one is not, and that `PATCH`/`DELETE` on an adjustment return `404`.
+
+**Source:** `backend/src/inventory/inventory.service.ts`, `backend/src/inventory/inventory.controller.ts` (header comment), `backend/src/inventory/dto/inventory.dto.ts`, `backend/src/inventory/inventory.e2e.spec.ts`. Raised while implementing Section 6.8. Related: [DEBT-002], [DEBT-026], [DEBT-028].
+
+**Status:** Open — code implements six rules the section omits. Needs §6.8 amended to record them.
+
+---
+
+### DEBT-030 — `GET /customers` returns no order aggregates, so the customers list cannot show what a customer is worth
+
+**Where it needs to land:** Section 6.6 (`GET /api/v1/customers`), and Section 2 FR-CUST-*
+
+**What needs to be written:** whether a customer list row carries any summary of that customer's trading history, and if so, what each figure counts.
+
+The mock-driven customers page had two columns the API cannot fill: **Total Orders** and **Total Spend**. `GET /customers` returns the customer record only — name, contacts, `isActive`, timestamps. `GET /customers/:id` embeds a page of order history, so the figures are reachable, but only one customer at a time: rendering them in a ten-row table means eleven requests, and the count would still be the page size rather than the total.
+
+Both columns were therefore **dropped** when the page was wired, rather than filled with a per-row fetch or a fabricated number.
+
+The reason they cannot simply be added is that neither is well defined yet, and the definitions are business decisions rather than implementation details:
+
+1. **Total Orders — over which statuses?** Counting `Pending` orders means the figure moves when an order is completed and moves again if it is abandoned. Counting only `Completed` means a customer with a full basket at the till reads as never having bought anything.
+2. **Total Spend — gross or net of refunds?** A customer who bought Rs 100,000 and returned all of it has spent Rs 100,000 by one reading and Rs 0 by another. Both are defensible; they answer different questions ("how much have we invoiced them" vs "how much have we kept"), and a single unlabelled column cannot mean both.
+3. **Over what window?** Lifetime, or a trailing period? A lifetime figure makes a long-dormant customer look active.
+
+Note this is the mirror of the `customerName`/`lineCount` join added to `GET /orders`: that one was added because a customer's name on their own order needs no business definition, whereas these two do. The distinction is worth recording so the next such gap is decided the same way rather than by whichever is easier.
+
+**What the fix requires:** decide the three questions above, then either add the aggregates to `GET /customers` as named fields whose names state their answer (`completedOrderCount`, `netSpendCents`, not `totalOrders`/`totalSpend`) or state in §6.6 that the list is deliberately record-only and the figures live on the detail view.
+
+**Interim state:** the two columns are absent from `src/app/(dashboard)/customers/page.tsx`. `CustomerDetail.orders` (a paginated envelope) is the only order data any customer view has, and the detail dialog renders it as a list rather than a total.
+
+**Source:** `backend/src/customers/customers.service.ts`, `src/lib/api/customers/queries.ts` (`Customer` vs `CustomerDetail`), `src/app/(dashboard)/customers/page.tsx`. Raised while wiring the Customers page to the API. Related: [DEBT-023].
+
+**Status:** Open — two list columns were removed rather than guessed. Needs §6.6 to say whether they come back and what they count.
+
+---
+
+### DEBT-031 — The frontend permission matrix is a second copy of the backend's, and a custom role renders a dead UI
+
+**Where it needs to land:** Section 6.4 (roles and permissions), and Section 4 (System Architecture) as an authority statement
+
+**What needs to be written:** which artefact is the authority on what a role may do, and how a client learns it.
+
+There are currently two independent answers. `src/config/permissions.ts` holds a hard-coded module × action matrix per built-in role name, and `useCanPerform()` reads it to decide whether to render a button. The backend holds `RolePermission` rows and enforces them per request. Nothing keeps the two in agreement, and the frontend copy has a structural limit the backend does not: it is keyed by **role name**, so it can only describe the four built-in roles.
+
+The consequence is specific and user-visible. `POST /roles` creates custom roles with arbitrary permission sets (Section 6.4). A user assigned such a role gets a lookup miss in the frontend matrix, which fails closed — so the UI hides every gated action, including ones the server would allow. The user sees an application with no buttons, and nothing in the interface explains why. Their requests would succeed if they could be made.
+
+The fail-closed direction is the right default and should stay: a visible button that 403s is worse than an absent one. But it is a safe failure of a wrong design, not a correct behaviour.
+
+**The fix is for the session to carry the viewer's effective permissions.** `GET /auth/me` already returns the user's role; it should return the permission set that role resolves to, and `useCanPerform` should read that instead of a local table. Then a custom role works with no frontend change, the two copies collapse into one, and the client's answer is derived from the server's rather than kept in step with it by hand.
+
+**What the fix requires:** add the resolved permission set to `GET /auth/me`'s response in §6.2, state in §6.4 that `RolePermission` is the sole authority, and record that any client-side permission check is a rendering affordance whose only legitimate source is that response. Then delete the role-keyed matrix.
+
+**Interim state:** `src/config/permissions.ts` remains the frontend's source, and every wired page gates on it (`useCanPerform(Modules.SALES, Actions.REFUND)` and similar). This is correct for the four built-in roles and wrong for any custom role.
+
+**Source:** `src/config/permissions.ts`, `src/contexts/role-context.tsx`, `backend/src/access-control/access-control.constants.ts`, `backend/src/auth/auth.controller.ts` (`GET /auth/me`). Raised while wiring the Sales page's refund gate. Related: [DEBT-021].
+
+**Status:** Open — a custom role currently sees a UI with its actions hidden. Needs `/auth/me` to carry permissions.
+
+---
+
+### DEBT-032 — Dashboard and Reports read mock orders, and the wired Sales page no longer feeds them
+
+**Where it needs to land:** no SRS section — this is an implementation-sequencing note, recorded here because it is a **visible behaviour regression** that would otherwise look like a bug
+
+**What needs to be written:** nothing, in the documents. What needs recording is that the state is known and temporary.
+
+`OrdersProvider` (`src/contexts/orders-context.tsx`) holds a mock order array. Before Sales was wired, placing an order pushed a fabricated `OrderRecord` into it, so a new sale immediately appeared in the Dashboard's metrics and in the Reports page's figures. Both of those pages still read that context.
+
+Now that Sales posts to `POST /orders`, it no longer writes to the context — the order goes to the database and comes back through `GET /orders`. So:
+
+- **Sales history is real.** It reflects the database, paginates server-side, and survives a reload.
+- **Dashboard and Reports are still mock, and are now also static.** They show the seeded array and no longer gain a row when a sale is made.
+
+That is a loss of an illusion rather than a loss of data: those pages were never showing real figures, and a fabricated row appearing in a mock total was misleading in a way that is easy to mistake for working software. But an operator who places an order and sees the dashboard unchanged will read it as a fault, so it must not sit unexplained.
+
+`use-dashboard-metrics.ts` and `reports/page.tsx` are the two remaining consumers. `OrdersProvider` and `ProductsProvider` can both be deleted once those are wired — no earlier, because removing them now would leave two pages unable to render at all.
+
+**What the fix requires:** wire the Dashboard (composed from `GET /orders`, `GET /inventory/alerts` and `GET /products` — there is no dashboard endpoint) and the Reports page (needs Section 6.11, which does not exist yet). Then delete both providers and the `src/lib/mock-data/` modules they read.
+
+**Source:** `src/contexts/orders-context.tsx`, `src/hooks/use-dashboard-metrics.ts`, `src/app/(dashboard)/reports/page.tsx`, `src/app/(dashboard)/sales/page.tsx`. Raised while wiring the Sales page.
+
+**Status:** Open — expected to close when Dashboard and Reports are wired. Tracked so the static dashboard is not diagnosed as a defect.
+
+---
+
+### DEBT-033 — `PurchaseOrder` has no tax columns, so `totalCents` can only ever equal `subtotalCents`
+
+**Where it needs to land:** Section 6.9 (purchase orders), and Section 5's data model alongside the `PurchaseOrder` table
+
+**What needs to be written:** either that a purchase order is deliberately tax-free at this stage, or the two columns that would make the total mean something.
+
+`Order` carries `taxRateBps` and `taxAmountCents`, so its `totalCents` is a genuinely different number from its `subtotalCents`. `PurchaseOrder` carries neither. Section 6.9 nevertheless instructs the server to compute *both* `subtotalCents` and `totalCents` from the lines — and with no tax, no freight, no discount and no other adjustment column, that computation produces the same integer twice.
+
+So `totalCents` is, today, a duplicate of `subtotalCents` in every row the API can write. `PurchasesService.computePOTotals` returns it that way and the response exposes both, because the column exists and a client reading `totalCents` should not have to know it is currently redundant.
+
+The reason this is debt rather than a bug is that it hides a real question: **is purchase-side tax out of scope, or unbuilt?** A business buying stock in Pakistan pays sales tax on the purchase and generally reclaims it, which is exactly the kind of figure a purchase ledger is expected to carry. If that is deliberately deferred, the document should say so, because the schema currently *looks* like it forgot. If it is not deferred, the fix is columns and a migration, not a code change.
+
+Two smaller consequences worth noting when this is decided:
+
+- **Section 6.11's supplier-spend report will aggregate `totalCents`.** Whatever that column comes to mean, the report inherits it — so the answer here decides whether "spend" means tax-inclusive or not.
+- **The frontend PO form has no tax field.** It matches the schema today, which means adding tax later is a schema change *and* a form change, not just a backend one.
+
+**What the fix requires:** a decision, then either one sentence in Section 6.9 ("a purchase order records the pre-tax cost of goods; purchase tax is out of scope for v1") or a migration adding `taxRateBps` and `taxAmountCents` to `PurchaseOrder`, with `computePOTotals` and the PO DTO following.
+
+**Source:** `backend/prisma/schema.prisma` (`model PurchaseOrder`), `backend/src/purchases/purchases.service.ts` (`computePOTotals`), `backend/src/purchases/dto/purchase-order.dto.ts` (`PurchaseOrderResponse.totalCents`). Raised while building Section 6.9.
+
+**Status:** Open — the API is internally consistent; what is missing is the statement of intent.
+
+---
+
+### DEBT-034 — A purchase order does not say which branch receives the goods
+
+**Where it needs to land:** Section 6.9 (purchase orders), and Section 5's data model on the `PurchaseOrder` table
+
+**What needs to be written:** which branch a delivery lands in, and when that is decided.
+
+`StockAdjustment.branchId` is **required** — every stock movement is attributed to a branch, which is what makes a per-branch count possible at all. `Order` carries `branchId` for the same reason: a sale happens somewhere.
+
+`PurchaseOrder` carries no `branchId`. But receiving a PO writes stock adjustments — `SYSTEM_REASON_CODES` in Section 6.8's DTO reserves `PurchaseReceived` for exactly this — and each of those rows needs a branch. Nothing in the PO says which one.
+
+`PurchasesService.applyReceipt` resolves it to the tenant's **default branch**: `isDefault: true` first, then the oldest active branch as a fallback so a tenant whose seed never set the flag still receives stock. That is correct for the single-branch tenant the seed describes, and it is the only answer available without a migration. It is wrong the moment a tenant has two branches and a delivery arrives at the second one: the goods are counted at head office and the receiving branch's shelves read empty.
+
+The gap is narrower than it looks, because the *right* fix is not obvious and the document has to choose:
+
+- **`PurchaseOrder.branchId`, set when the PO is raised** — the buyer names the destination up front. Simple, and matches how `Order.branchId` works. Wrong if a PO is routinely split across branches on arrival.
+- **A branch on the receipt rather than the PO** — chosen at `PATCH /:id/status` when `toStatus` is `Received`. More faithful to how deliveries actually arrive, and it makes partial receipt across branches expressible later.
+
+The first is a column and a form field. The second is a body on a status transition that currently takes one field, and it changes what the endpoint means.
+
+**What the fix requires:** a decision in Section 6.9, then a migration. Until then, multi-branch tenants must not use purchase orders — which is neither enforced nor stated anywhere a user would see.
+
+**Source:** `backend/prisma/schema.prisma` (`model PurchaseOrder`, `model StockAdjustment`, `model Branch.isDefault`), `backend/src/purchases/purchases.service.ts` (`applyReceipt`, `defaultBranchId`). Raised while building Section 6.9.
+
+**Status:** Open — the single-branch case is correct; the multi-branch case silently books goods to the wrong branch.
+
+---
+
+### DEBT-035 — `Product.embedding` is a fixed-size pgvector column that locks the AI feature to one embedding model
+
+**Where it needs to land:** Section 5 (ERD — the new `Product.embedding` / `Product.embeddingText` columns), and Section 4 (the AI feature's external-dependencies list, beside the provider row)
+
+**What needs to be written:** the schema, the model, and the swap path for Smart Search embeddings.
+
+`Product.embedding` is `vector(1536)`, the dimensionality of OpenAI's `text-embedding-3-small` (the default `AI_EMBEDDING_MODEL`). The dimension is part of the column type, so changing it is a `DROP COLUMN` + re-`ADD COLUMN` + full re-embed — the HNSW index has to come down with the column, and the partial index only works while the column exists. A migration that changes the type is **not** cheap, and the cost falls on every existing tenant.
+
+Three things this affects, all of which the spec section this lands in has to record:
+
+1. **Why the column is in raw SQL, not Prisma.** Prisma 7 has no native vector type. The column is added in `backend/prisma/migrations/20260830000000_smart_search_pgvector/migration.sql` and exposed to the client as `embedding String? @ignore` and `embeddingText String? @ignore` — `@ignore` keeps the field off the generated client (its writes happen through `$executeRaw` and `$queryRaw`), and `String?` is the smallest valid Prisma type the validator will accept (a more honest "owned by raw SQL" annotation does not exist in v7). The model comment explains both.
+2. **The 1536-dimension coupling.** This dimension is the right size for `text-embedding-3-small` (and a few older 1536-dim models). A 3072-dim model — `text-embedding-3-large`, or any model that produces longer vectors — cannot be swapped in by changing the env var; the migration path is a new migration that drops the column, adds a new one with the new dimension, and triggers a catalogue-wide re-embed. So the "provider-agnostic" promise of `AIProviderInterface` is a little smaller than it looks: the **interface** is provider-agnostic, the **storage** is dimension-agnostic only up to the size that was chosen. Recorded here so a future reader does not assume the column can be resized by setting an env var.
+3. **`embeddingText` is a backfill marker, not a flag.** Without an AI provider, every product write records the text the embedding *would* have been generated from, so a later activation can backfill in one pass: "rows with `embedding IS NULL` AND `embeddingText IS NOT NULL`" is the working set. A bare "needs embedding" boolean would have done the same job but lost the text once it was consumed, which would mean a partial re-embed on a second model change would have nothing to embed from. The mirror column is the slightly more honest design.
+
+**Also worth a sentence in Section 4:** the extension `vector` is **not** in stock Postgres 17 — it ships in `postgresql-17-pgvector` on Debian/Ubuntu images and in most managed Postgres offerings (Neon, Supabase, RDS, Hetzner-managed) but is not part of `postgres:17-alpine` by default and has to be added with `apk add postgresql17-pgvector` or equivalent. The migration runs `CREATE EXTENSION IF NOT EXISTS vector` so it is recoverable on a stock image, but the host that runs the production database must be one where the extension is installable, and that is a deployment-decision moment (Section 4.8) that has to name pgvector, not just "Postgres 17".
+
+**What the fix requires:** a Section 5 row on the new columns (typed, nullable, raw-SQL-owned, dimension-locked), a Section 4 row on pgvector as an external dependency, and a note in the AI section that the dimension is chosen at migration time and is part of the contract.
+
+**Interim state:** the column, the index, the mirror column and the fail-soft sync hook are all in place and verified on the dev instance. A backfill on AI enable is one script away from working once a provider is configured.
+
+**Source:** `backend/prisma/migrations/20260830000000_smart_search_pgvector/migration.sql`, `backend/prisma/schema.prisma` (`Product` model, `@ignore` fields and comment), `backend/src/ai/embedding.service.ts`, `backend/.env.example` (AI block with the dimension note), `backend/src/products/products.service.ts` (fire-and-forget hooks). Raised while implementing the AI Phase 1 Smart Search. Related: [DEBT-034].
+
+**Status:** Partially resolved — schema decision recorded and the hybrid ranking from the brief is implemented (`backend/src/ai/search.service.ts`, RRF with `k=60`); the coupling between model choice and column dimension is the kind of thing a Section 5 reader has to be told explicitly. The ranking itself is filed under [DEBT-039] for doc-sync.
+
+---
+
+### DEBT-036 — Spec identifiers quoted in the AI implementation brief do not exist in the spec
+
+**Where it needs to land:** Sections 2 (FR-AI-* and FR-REP-*) and the Business Rules section BR-*
+
+**What needs to be written:** decisions the AI Phase 1 brief referenced by identifier that no spec section defines. Three of them, each a real spec gap:
+
+1. **FR-AI-04 does not exist.** The brief asks the implementation to label AI-generated insights in the UI and cites "BR-08" as the rule. The label was implemented, but no FR-AI-04 says the feature exists at all. The closest section is FR-AI-03 (Dashboard Health Score + Reports insights), which names the score and the insights but does not name the labeling requirement. Section 2 needs an FR-AI-04 that says "every AI-generated text rendered in the UI must be visually distinguishable from a non-AI string", and points at the BR the brief cited.
+2. **FR-REP-04 does not exist.** The brief's reference to "Reports insights" (FR-AI-03's second half) is real and implemented, but the section that defines the Reports insight list is FR-REP-03 (existing reports). There is no FR-REP-04 in the spec text. Either the brief was reading ahead of the section, or the section number drifted. The implementation chose the "dashboard insights feed into the Reports page later" path, which is the right one but is not in the spec.
+3. **BR-08 is the PO state machine, not the AI-label rule.** The brief calls BR-08 the requirement that AI outputs be labeled. `BR-08` in the spec is the purchase-order state machine (Draft → Sent → Received/Cancelled). The actual rule the brief was reaching for is closer to BR-04 (no AI may be presented as a human) or no existing BR at all — it has to be added. The implementation labels AI insights anyway, because the requirement is right; the *citation* was wrong. The next reviewer who grep's "BR-08" in the code will find PO state transitions, not labeling.
+
+The pattern across all three is the same: the AI Phase 1 brief referenced a tidy set of spec identifiers, and those identifiers are not the ones the spec has. The implementation is sound, but the cross-references a future maintainer will follow are pointing at the wrong sections.
+
+**What the fix requires:** a sweep of the AI spec for missing FRs, a decision on whether BR-08 keeps the PO state machine or migrates to the labeling rule (recommend: add a new BR for the labeling rule, keep BR-08 as the PO state machine — they are unrelated concerns and a renumber is more disruption than the new rule is worth), and a corresponding update to the brief / implementation notes so the next phase cites the right identifiers.
+
+**Interim state:** labeling is implemented (`InsightsCard` shows an "AI-generated" badge on every insight with `aiGenerated: true`); the spec citation the implementation is filed under does not exist.
+
+**Source:** `backend/src/ai/`, `src/components/dashboard/InsightsCard.tsx` (the `aiGenerated` rendering branch), the AI Phase 1 brief in the prior session's transcript. Raised during the DEBT-035 review of the AI Phase 1 build. Related: [DEBT-035].
+
+**Status:** Open — implementation is correct, citations are wrong. Needs the spec amended, not the code.
+
+---
+
+### DEBT-037 — AI re-embed is CLI-only; `POST /ai/reembed` is a stub that returns immediately
+
+**Where it needs to land:** Section 6.12 (the AI admin endpoints, where the re-embed contract is described), and Section 2's FR-AI-03 (operational requirements)
+
+**What needs to be written:** what `POST /api/v1/ai/reembed` is actually doing today, and what it has to do for a multi-tenant production deployment.
+
+`POST /ai/reembed` is wired and protected (requires `settings.write`), and it correctly refuses if no AI provider is configured. Beyond that, it does not run a job: it counts the rows that need embedding, generates a job ID, and returns `{ jobId, productsToProcess, message: "Re-embed job queued. Use the CLI (npm run ai:reembed) to process." }`. The real work happens only when an operator runs the CLI script, which iterates tenants sequentially and processes products in batches. The controller is honest about this — the message tells the caller to use the CLI — but the contract is two-step (HTTP request, then a separate process) and there is no progress signal, no completion notification, and no record of who started it.
+
+For a single-tenant dev instance that is fine: an operator with shell access runs the script. For a managed multi-tenant deployment it is not, because:
+
+1. **The operator has to log in to the backend container** to run the script, which is a deployment surface most managed hosting does not expose.
+2. **There is no audit trail of who triggered a re-embed, when, or how many succeeded.** A row that fails partway through leaves the catalogue half-embedded, and a second invocation is required without any way to know the first stopped where it did. `embedding` and `embeddingText` are both nullable, so the row is in the working set again by definition.
+3. **Concurrent re-embeds from different tenants** are not coordinated. Two tenants clicking "Re-embed" five seconds apart each spawn a CLI run (or would, if the endpoint queued anything), and both hammer the OpenAI endpoint with the same working set of rows.
+4. **There is no per-tenant concurrency control.** A 50,000-SKU tenant can monopolise the OpenAI rate limit and stall other tenants' re-embeds.
+
+**What the fix requires:** a proper async job system. BullMQ + Redis is the natural choice for a Node backend and is the one already proposed (and deferred) in the AI controller's TODO. The endpoint then returns a real job ID, the operator polls a `GET /ai/jobs/:id` for progress, and the worker respects per-tenant concurrency and provider rate limits. A `AIReembedJob` Prisma model (tenantId, status, totals, startedAt, finishedAt, error) gives an audit row for free. Until that exists, the CLI is the only honest path and the endpoint should stay labelled as a stub.
+
+**Interim state:** the endpoint is implemented, the CLI (`backend/src/ai/reembed-all.ts`, `npm run ai:reembed`) is implemented, and the controller message points operators at the CLI. The gap is between the two: there is no automated bridge.
+
+**Source:** `backend/src/ai/ai.controller.ts` (`triggerReEmbed`, the `// TODO: Implement proper job queue` line and the response message), `backend/src/ai/reembed-all.ts`. Raised while wiring AI Phase 2 admin endpoints. Related: [DEBT-035].
+
+**Status:** Open — works for dev/single-tenant; a multi-tenant production deployment needs a real job system.
+
+---
+
+### DEBT-038 — AI feature has no runtime toggle; absence of `AI_API_KEY` at boot is the only switch
+
+**Where it needs to land:** Section 6.12 (AI admin endpoints) and Section 2 (FR-AI-01 graceful degradation)
+
+**What needs to be written:** how an operator turns AI features off and on without a redeploy, and what the right granularity is.
+
+Today the only switch is `AI_API_KEY` in the environment. The `AIModule` factory reads it once at construction:
+
+```
+const apiKey = config.get<string>('AI_API_KEY');
+if (apiKey) return new OpenAICompatibleAIProvider(config);
+return new NoopAIProvider();
+```
+
+That means the choice is fixed for the lifetime of the process. To turn AI off, an operator sets `AI_API_KEY=""` and restarts the backend; to turn it back on, restart with the key set. Two production-shaped scenarios this cannot answer:
+
+1. **A provider outage that is not the operator's fault.** If OpenAI returns 5xx for an hour, every `search()` and every health-insights generation logs the error, retries three times, and returns the text-search fallback. The user-visible behaviour is correct (FR-AI-01), but the logs are noisy and the retries cost money. A runtime toggle — "AI is off for the next hour" — would suppress both at the provider boundary, not at every call site.
+2. **A per-tenant kill switch.** If a particular tenant's data has triggered a privacy review (or they are on a trial that excludes AI), there is no way to disable AI for that tenant only. They would have to be moved to a deployment without an API key, which is not a thing a multi-tenant SaaS can do.
+
+The right shape is a `TenantSetting.aiEnabled` (or a global one) read in the same place the factory reads the API key — but the factory runs once per process, not per request, so the call site is the per-request service methods. A small wrapper that the services check first would work without restructuring the provider interface.
+
+**What the fix requires:** a runtime feature flag (per-tenant is the most flexible, global is the minimum) and a single check in each of the four provider-method call paths (`SearchService.search`, `HealthInsightsService.generate`, `EmbeddingService.syncProduct`). The provider itself stays as-is; the call sites become one-liners. Until this exists, "AI off" means "restart the process", which is too coarse for production.
+
+**Interim state:** the boot-time switch works and the graceful-degradation contract is honoured. The cost of leaving it as is is operational: every operator action to disable AI is a redeploy.
+
+**Source:** `backend/src/ai/ai.module.ts` (the factory, line 45), `backend/src/ai/search.service.ts` (`ai.isConfigured()` checks at the call sites), `backend/src/ai/health-insights.service.ts`. Raised while implementing the OpenAI provider. Related: [DEBT-035], [DEBT-037].
+
+**Status:** Open — works as designed; designed for boot-time configuration, not runtime.
+
+---
+
+### DEBT-039 — `SearchService` hybrid ranking fills from text but does not score vector rows that are missing in text
+
+**Where it needs to land:** Section 6.12 (the Smart Search endpoint) and Section 4.5 (the AI feature's behaviour description)
+
+**What needs to be written:** the exact ranking rule and its single, documented quirk.
+
+The Phase 1 brief asked for hybrid ranking so that a tenant with a partially-embedded catalogue (some products have `embedding`, others have only `embeddingText` set) still gets a full result set. The implementation uses Reciprocal Rank Fusion (RRF, `k=60`):
+
+```
+score(d) = 1/(k + rank_vector(d)) + 1/(k + rank_text(d))
+```
+
+A document that appears in only one list gets one term; a document in both gets two. Rows are then sorted by descending score and trimmed to 20.
+
+The RRF math is right, but the implementation has one quirk worth recording so the next reader does not call it a bug. **The text list is filtered to exclude rows already returned by the vector list before RRF runs.** That sounds redundant (RRF de-duplicates on the same id anyway), but it matters here because the text list and the vector list use **different filters**: the vector query applies `embedding IS NOT NULL` and a similarity floor, while the text query applies `ILIKE` over `name`/`sku`/`category`. A product with an embedding that did not match the query closely enough is *not* in the vector result, so it can still legitimately match the text path. The pre-filter is "rows the text path would re-add", not "rows the vector path already has", and a row that scores highly on the text path but is missing from the vector result still appears in the merged top-20 with a `similarity: null` on the wire.
+
+`SearchProductHit` declares `similarity?: number` for exactly this reason: a row that came from the text path has no similarity to report, and the client renders it without a score. The shape of that omission is the contract; a future change that adds a similarity for text-only rows would be a different ranking, not a bug fix.
+
+**What the fix requires:** state the rule in Section 6.12, in roughly the words above, and add `similarity: number | null` to the documented response shape (it is already `?: number` in code, which is close enough; the spec should say "null when the row came from the text path, a float in [0, 1] otherwise"). Until that is written, the omission reads as an oversight.
+
+**Interim state:** implemented and covered by tests; the gap is in the doc.
+
+**Source:** `backend/src/ai/search.service.ts` (`combineResults`, the `RRF_CONSTANT = 60` and `MAX_RESULTS = 20` constants, and the line where the pre-filter happens), `backend/src/ai/dto/search.dto.ts` (`SearchProductHit.similarity?`). Raised while implementing the hybrid ranking.
+
+**Status:** Open — code is correct, doc is silent on the rule.
+
+---
+
+### DEBT-040 — `prisma migrate deploy` reaches Supabase over TLS but does not verify the server chain
+
+**Where it needs to land:** Section 4.8 (deployment / data protection) and Section 9 (non-functional: security), wherever the database transport guarantee is stated.
+
+**What needs to be written:** that the guarantee is not uniform across the two connections this system opens to Postgres.
+
+Supabase serves a cert chained to a private root (`Supabase Root 2021 CA`) that Node does not ship. The **application's** pool pins it correctly: `buildPgConfig` (`backend/src/prisma/pg-config.ts`) reads `DATABASE_CA_CERT_PATH` and passes `ssl: { ca, rejectUnauthorized: true }` to `PrismaPg`, so every query the API issues runs over a connection whose chain was verified against that root. Substituting a wrong CA fails the handshake with `SELF_SIGNED_CERT_IN_CHAIN`, which is the proof that verification is actually on rather than nominally configured.
+
+The **schema engine's** connection — the separate native process (`@prisma/engines/schema-engine-*`) behind `prisma migrate deploy` — does not. Measured against the live project, `prisma migrate status` (read-only) behaves as follows:
+
+| Configuration | Expected if verifying | Actual |
+| --- | --- | --- |
+| `PGSSLROOTCERT` = the real root | pass | pass |
+| `PGSSLROOTCERT` unset | fail (untrusted root) | **pass** |
+| `PGSSLROOTCERT` = a bogus PEM | fail | **pass** |
+| URL `?sslmode=verify-full&sslrootcert=<bogus>` | fail | **pass** |
+| URL `?sslmode=require&sslcert=<real root>` | pass | pass |
+| URL `?sslmode=require&sslcert=<malformed PEM>` | fail (parse) | fail — `P1011 … ASN1 unexpected end of data` |
+| URL `?sslmode=require&sslcert=<valid but WRONG public root>` | fail (untrusted) | **pass** |
+| URL `?sslmode=verify-full&sslcert=<valid but WRONG root>` | fail | **pass** |
+| URL `?sslmode=disable` | — | refused **by Supabase**: `SSL connection is required for user: postgres` |
+
+The last four rows are the informative ones and they were not in the first pass of this measurement. `sslcert` **is** read — a malformed PEM fails with a parse error, which proves the engine opens and decodes the file — but it is **not used as a trust anchor**: a genuine, correctly-parsing public root CA that has nothing to do with Supabase connects fine. The control for that row is the same file handed to `node-pg` on the application's own path, which correctly refuses it with `self-signed certificate in certificate chain`. So "wrong CA" is detectable; the schema engine simply does not check.
+
+The connection is still encrypted — `sslmode=disable` is refused by the server, so there is no plaintext path — making this an **authentication-of-the-server** gap, not a confidentiality one: migrations are exposed to an *active* MITM able to present any certificate, not to passive interception.
+
+**This is an upstream limitation, not a misconfiguration here.** Four independent lines of evidence:
+
+1. **Parameter surface of the shipped engine.** The only `ssl*` URL keys present as strings in the 7.9.1 schema-engine binary are `sslcert`, `sslidentity`, `sslmode` (alongside the MongoDB spelling `tlsCAFile`, all three reached from `schema-engine/core/src/state.rs`). There is no `sslrootcert` string at all. `sslaccept` — the `strict` / `accept_invalid_certs` switch commonly cited as the fix, e.g. in [prisma/prisma discussion #13462](https://github.com/prisma/prisma/discussions/13462) — appears **only** in Quaint's MySQL URL parser (`quaint/src/connector/mysql/url.rs:47`, "Unsupported SSL accept mode, defaulting to `accept_invalid_certs`"). It is not wired to the PostgreSQL connector, so the widely-copied Azure answer does not transfer. `verify-ca` / `verify-full` occur once each, inside an upstream `rust-postgres` message about `sslnegotiation=direct` — not in Prisma's own mode handling, which per the docs recognises only `prefer`, `require`, `disable`.
+2. **Prisma's own tracking issue.** [prisma/prisma#10833 — "Support `sslmode=verify-full` and `sslrootcert`"](https://github.com/prisma/prisma/issues/10833), filed 22 Dec 2021 by a Prisma team member who noted the engine does "not understand and adhere to" those parameters, is **closed as not planned**. No workaround, no timeline.
+3. **Prisma 7 removed the escape hatch that would have fixed it.** Up to v6.19, `prisma.config.ts` accepted `adapter: () => Promise<SqlMigrationAwareDriverAdapterFactory>` — "a Prisma driver adapter instance which is used by the Prisma CLI to run migrations". Handing that a `PrismaPg` built by `buildPgConfig()` would have given migrations the *same verified* TLS as the runtime pool. The [config reference](https://www.prisma.io/docs/orm/reference/prisma-config-reference) records `adapter` as **removed in v7**; migrate now takes its connection from `datasource.url` only. The installed `@prisma/config` 7.9.1 confirms it: `Datasource = { url?: string; shadowDatabaseUrl?: string }` and nothing else. For this specific property, v7 is a regression from v6.
+4. **Docs never claimed it.** Prisma's [PostgreSQL connector page](https://www.prisma.io/docs/orm/overview/databases/postgresql) documents `sslmode` (`prefer`/`require`/`disable`), `sslcert` ("Path to server certificate") and `sslidentity`, and says nothing anywhere about chain or hostname verification. Related: [#8697](https://github.com/prisma/prisma/issues/8697) reports `sslmode=require` alone not even forcing encryption.
+
+Conclusion: **no combination of connection-string parameters or environment variables makes the Prisma 7 schema engine authenticate the PostgreSQL server.** Any mitigation has to sit outside Prisma.
+
+The blast radius is small but not nil. The credential on that connection is the same `DATABASE_URL` password the app uses, so a successful MITM captures it. Nothing in the repo currently claims otherwise — the docs were corrected in the same change that raised this — but the temptation to read the `PGSSLROOTCERT` in `docker-compose.supabase.yml` as the thing that makes migrate safe is exactly why this needs writing down.
+
+**What the fix requires:** a posture decision, because Prisma offers no lever. The three viable options, with what each actually buys:
+
+| Option | Closes the gap? | Cost |
+| --- | --- | --- |
+| **(a) Accept, and rely on the network path.** State the residual risk in Section 9. Migrations keep running from the entrypoint. | No — reduces nothing | Zero code |
+| **(b) Move `migrate deploy` out of container start** into one gated deploy step (CI job or an operator-run command) and drop it from `docker-entrypoint.sh`. | Partially. Narrows exposure from every container start of every replica to one run per deploy from one known host — but a CI runner still reaches Supabase over the public internet, unverified. | Small; also fixes the unrelated N-replicas-race-on-boot problem |
+| **(c) Front the engine with a verifying tunnel.** A local TLS terminator that does full chain + hostname verification against the pinned root, with the engine connecting to `127.0.0.1`. Note Postgres TLS is a STARTTLS-style upgrade after the `SSLRequest` packet, not implicit TLS, so the terminator must speak the Postgres negotiation — `stunnel`'s `protocol` option is the usual answer (**verify the exact directive and its client-mode support before committing to this option; not yet confirmed against the stunnel manual**), otherwise `pgbouncer` with `server_tls_sslmode=verify-full` does the same job as a real Postgres proxy. | **Yes.** The verified session is established before the engine's bytes leave the host, and the engine↔tunnel hop is loopback inside one network namespace. | One package in the runtime stage, a tunnel config, an entrypoint that starts it first — plus a new failure mode to operate |
+
+(b) and (c) compose, and together are the strongest posture: migrations run once per deploy, over a verified tunnel.
+
+Whichever is chosen, re-test the table above on each Prisma upgrade. Note the standing hope recorded in the previous revision of this entry — that a future release would adopt libpq semantics and make the already-set `PGSSLROOTCERT` start working — is **not** a reasonable expectation: #10833 is closed as not planned, and v7 removed the `adapter` hook that would have made it moot.
+
+**Decision (taken):** **(b) now, (c) at Phase 5.** Implemented in the commit that added this paragraph:
+
+- `backend/docker-entrypoint.sh` no longer runs `prisma migrate deploy` — it starts the API and nothing else. `backend/Dockerfile`'s `ENTRYPOINT` is that script, so no container start touches the schema engine.
+- The one-shot `migrate` service in `docker-compose.yml` (`--profile migrate`, `restart: "no"`, run with `--rm`) is now the sole migration path, promoted from an optional operator convenience to a required release step.
+- `scripts/deploy.sh` encodes the ordering — build → migrate once → `up` — and `set -eu` aborts before any container starts if the migration step exits non-zero.
+- `README.md`, `docs/deployment.md` (new §3.1/§3.2), `docs/supabase-setup.md`, `.env.production.example` and `docker-compose.supabase.yml` no longer describe migrations as happening at container start.
+
+Exactly one container runs `migrate deploy` per deploy, regardless of replica count, so the concurrent-DDL race is structurally impossible rather than merely serialised by Prisma's advisory lock.
+
+**Residual risk, explicitly accepted:**
+
+> Between the implementation of mitigation (b) and mitigation (c), `prisma migrate deploy` connects to Supabase with TLS encryption but no certificate/hostname verification, once per deployment (not once per container boot, per replica, as previously). An attacker capable of intercepting and actively manipulating the network path between the CI/deploy runner and Supabase's endpoint during that single connection window could present a fraudulent certificate and capture the database credentials in transit. This does not affect the application's runtime database connections, which correctly verify the server certificate via the pg driver adapter — the gap is scoped exclusively to the migration tool's connection, at deploy time only. This risk is accepted as low-likelihood (requires an active, targeted MITM position against a specific CI-to-Supabase network path, not passive eavesdropping) but real, and is scheduled for full closure via a verifying local tunnel (option c) in Phase 5 of the production-readiness plan.
+
+For precision on one term in the acceptance above: the "CI/deploy runner" is, today, whichever host executes `scripts/deploy.sh` — there is no automated CD pipeline yet. When one lands, this becomes a single gated job and the acceptance applies unchanged.
+
+**Known consequence of (b), tracked separately:** nothing auto-applies a pending migration any more, so a release that ships new code without running the migrate step will boot the API against an old schema and fail at query time (readiness stays red). That is a deliberate loud failure rather than a silent self-migration, but the ordering is enforced by `scripts/deploy.sh` and documentation only — not by the container graph. See DEBT-041.
+
+**Interim state:** `PGSSLROOTCERT` is set in `docker-compose.supabase.yml` and `backend/.env` because it is correct for `psql`/`pg_dump` in the same container; every doc that mentions it says plainly that Prisma does not honour it.
+
+**Source:** measured against the live Supabase project (9 configurations, read-only `prisma migrate status`, with a `node-pg` control proving "wrong CA" is detectable); string analysis of the installed `@prisma/engines` schema-engine binary; the `Datasource` type in the installed `@prisma/config` 7.9.1; `backend/docker-entrypoint.sh`, `backend/Dockerfile`, `docker-compose.yml`, `docker-compose.supabase.yml`, `scripts/deploy.sh`, `backend/src/prisma/pg-config.ts`.
+
+**Status:** **Partially mitigated** — exposure window narrowed from continuous (every container boot, every replica) to a single deploy event. Full closure deferred to Phase 5 of the production-readiness plan via option (c), a verifying local tunnel. The residual risk is accepted in writing above. The upstream behaviour is fully characterised and proven to be a Prisma limitation rather than a local misconfiguration, so nothing further can be learned by investigating it; re-test the measurement table on each Prisma upgrade. Docs do not misstate the behaviour anywhere.
+
+---
+
+### DEBT-041 — nothing enforced "migrate before boot" (resolved by a boot-time schema-version check)
+
+**Where it needs to land:** Section 4.8 (deployment), wherever the release procedure is described.
+
+**What needs to be written:** that applying migrations is a mandatory, *separate* step of a release, and that skipping it produces a runtime failure rather than an automatic recovery.
+
+Created by the DEBT-040 (b) mitigation. Removing `prisma migrate deploy` from `backend/docker-entrypoint.sh` also removed the property it incidentally provided: the API could not start on a schema older than its code, because it migrated itself first. Now it can.
+
+The ordering is currently enforced by two things, both bypassable:
+
+1. `scripts/deploy.sh`, which runs build → `migrate` one-shot → `up` and aborts on a failed migration (`set -eu`).
+2. Documentation — `README.md`, `docs/deployment.md` §3.1/§3.2, and the `migrate` service comment in `docker-compose.yml`, all of which say the step is required.
+
+A bare `docker compose up -d` still starts the app without migrating. The failure mode is loud (queries against the missing column error out; `/api/v1/health/ready` stays red) and it is not a data-integrity risk — Prisma will not write against a schema it cannot see — but it is an availability foot-gun during a release.
+
+**Options, none yet chosen:**
+
+| Option | Effect | Cost |
+| --- | --- | --- |
+| Leave as-is; rely on `scripts/deploy.sh` being the documented entry point. | Status quo. Fine for a single-operator deploy, weak once more than one person deploys. | Zero |
+| `depends_on: migrate: {condition: service_completed_successfully}` on `backend`, with `migrate` out of the profile. | Compose itself would refuse to start the backend until the migration container exited 0. Needs verifying against the installed compose version: whether a *completed* one-shot re-runs on a subsequent `up`, and how the condition interacts with `profiles`, is version-dependent and was **not** tested. | Small, but needs a real compose run to confirm semantics |
+| A boot-time schema-version assertion in the app, over the **already-verified** pg pool (compare the latest row in `_prisma_migrations` against the migration directories baked into the image; refuse to start on a mismatch). | Restores the "never serve on a stale schema" guarantee without reintroducing the DEBT-040 exposure, because it uses the driver-adapter connection, not the schema engine. | Moderate: new startup check plus tests |
+
+**Resolved by** the third option — the one that actually restores the lost guarantee rather than papering over it with more documentation.
+
+`backend/src/prisma/schema-version.service.ts` runs on `onApplicationBootstrap` (after every module's init hook, still before `app.listen()`), reads the migration directories baked into the image, queries `_prisma_migrations`, and throws if any shipped migration is not recorded as successfully applied. The error names the missing migrations and the command that applies them.
+
+Three details that matter:
+
+- **It uses the verified connection.** The query goes through `PrismaService` — the pg driver adapter, which pins the CA and checks the server certificate. Prisma's schema engine, the component that cannot authenticate the server at all, is never invoked. So this restores "never serve on an old schema" without re-opening the DEBT-040 window that migrating-on-boot created. That is the whole reason this option was chosen over the other two.
+- **A row in `_prisma_migrations` is not success.** Prisma inserts the row when a migration *starts*, so a crash part-way through the DDL leaves `finished_at` null. That state is reported as `failed`, not `applied`, and gets its own message pointing at `prisma migrate resolve` — a partially-migrated database needs a human, not a retry.
+- **A database *ahead* of the build warns rather than fails.** During a rolling deploy an old instance briefly runs against the new schema, which additive migrations make safe. A persistent warning there means a rollback left code behind its data.
+
+`SKIP_SCHEMA_VERSION_CHECK="true"` is the documented emergency override; it logs a warning. A missing `prisma/migrations` directory is reported as a packaging fault and explicitly does **not** count as a pass — "cannot compare" is not "compared and matched".
+
+Covered by 12 unit tests in `src/prisma/schema-version.spec.ts`, including the skipped-migrate-step case this entry was opened for, the never-migrated database, the half-applied migration, and a test asserting the real `prisma/migrations` path still resolves — so if that directory ever moves, it fails in CI rather than silently disabling the production boot check.
+
+The `depends_on: service_completed_successfully` option from the table above was not taken: its semantics across compose versions (whether a completed one-shot re-runs on a subsequent `up`, and how the condition interacts with `profiles`) could not be verified here, and an application-level check is a stronger guarantee anyway — it holds for every start path, not just `docker compose up`.
+
+**Source:** `backend/src/prisma/schema-version.ts`, `backend/src/prisma/schema-version.service.ts`, `backend/src/prisma/prisma.module.ts`, `backend/docker-entrypoint.sh`, `scripts/deploy.sh`, `docs/deployment.md` §3.2. Related: DEBT-040.
+
+**Status:** Resolved — the guarantee lost to the DEBT-040 (b) mitigation is restored at the application layer, over the verified connection. `scripts/deploy.sh` and the docs still describe the ordering; the difference is that skipping it is now a refused boot rather than a runtime surprise.
+
+---
+
+### DEBT-042 — the decoupled e2e harness had never been executed green (resolved by the first CI run)
+
+**Where it needs to land:** Section 4.8 / the testing strategy, wherever the verification story is stated.
+
+**What needs to be written:** that the e2e suite's green status is currently unproven, and what proves it.
+
+The e2e suite was moved off the live Supabase project and onto an ephemeral pgvector container (`docker-compose.test.yml`, orchestrated by `backend/test/run-e2e.mjs`). Everything around that change is verified:
+
+- both Jest configs collect exactly the intended files — 15 unit specs, 14 e2e specs, no overlap;
+- the DATABASE_URL guard refuses Supabase, refuses unknown hosts, allows loopback and the CI service names, and fires in `globalSetup` before any worker spawns (demonstrated against a Supabase host: the run aborted with no connection attempted);
+- the AI provider guard binds the no-op under every test signal even with a key present, and still selects the real provider outside tests (9 unit tests);
+- the unit suite is green in ~18s, down from 324s, with no dangling-worker warning.
+
+At the time this entry was written, what was **not** verified was the thing that mattered most: a full e2e run, green, against the container. `docker` is not installed on the development machine (checked: no `docker`/`podman`/`nerdctl` on PATH, no Docker Desktop binaries or service, only a stale `C:\ProgramData\DockerDesktop` directory; WSL2 itself is present). The local PostgreSQL 18 service that *is* running cannot substitute — pgvector is not installed for it (no `vector.control`, no `vector.dll`), and `20260830000000_smart_search_pgvector` opens with `CREATE EXTENSION IF NOT EXISTS vector`.
+
+Pointed at the container URL with nothing listening, the harness behaves correctly up to that point: the guard passes (`[e2e] database host verified as throwaway: 127.0.0.1:55432`), the no-op provider is announced, and every suite then fails identically with `Can't reach database server at 127.0.0.1:55432`. So the wiring is right and the only missing input is a running container.
+
+**What closes this:** either
+
+1. install Docker Desktop and run `npm run test:e2e:local` — the intended path, and the only one that also exercises teardown; or
+2. open a PR, which now runs the `backend-e2e` job on every PR against the Actions service container. Note CI has never executed at all — `gh run list` returns `[]`, because the workflow triggers only on push/PR to `main` and this branch has neither.
+
+Until one of those happens, treat "the e2e suite passes" as an untested claim. In particular, the fourteen suites now run with `maxWorkers: 1` against a single shared database rather than in parallel as before; that is the safer configuration for marker-isolated fixtures, but the serial path has not been exercised either.
+
+**Source:** `docker-compose.test.yml`, `backend/test/run-e2e.mjs`, `backend/test/jest-e2e.json`, `backend/test/guard-database.ts`, `.github/workflows/ci.yml`.
+
+**Resolved by:** the repository's first CI run — [run 33978106137](https://github.com/abdulbhati07-a11y/MBOS/actions/runs/33978106137) on PR #1, all three jobs green. The `Backend E2E` job stood up `pgvector/pgvector:pg17` as a service container, applied the full migration history including `CREATE EXTENSION IF NOT EXISTS vector`, seeded, and ran **14 suites / 338 tests, all passing, in 43.2s**. The unit job ran 16 suites / 150 tests in 10.7s. Both guards logged their verdicts before any suite executed:
+
+```
+[e2e] database host verified as throwaway: localhost:5432
+[e2e] AI provider: forced no-op (no external API calls)
+```
+
+The negative evidence is what matters most, taken from the job log: **zero** occurrences of `supabase`, `api.openai.com`, `OpenAICompatibleAIProvider`, `no credits`, or `generateEmbedding failed`, and zero "worker process has failed to exit gracefully" warnings. The real provider class was never even constructed, despite the job deliberately setting a sentinel `AI_API_KEY` — so the guard is proven under live conditions, not just in unit tests.
+
+The `maxWorkers: 1` serial path noted above is also now exercised: all 14 suites ran serially against one shared database with no marker collisions.
+
+**Status:** Resolved — the harness is verified green in CI on every PR. Local execution still needs a container runtime (no Docker on the development machine), so `npm run test:e2e:local` remains the unexercised path; that is a developer-convenience gap, not a verification gap, since CI now gates every PR.
+
+---
+
+### DEBT-043 — a Supabase GitHub integration is installed on a public repository and points at the production-track project
+
+**Where it needs to land:** Section 4.8 (deployment) and Section 9 (security), alongside the DEBT-040 trust-boundary discussion.
+
+**What needs to be written:** that a third-party GitHub App with access to the live Supabase project runs on every pull request, and what it is and is not permitted to do.
+
+PR #1's checks include a **`Supabase Preview`** status, reported as `SKIPPED`, linking to `https://supabase.com/dashboard/project/cthqhofwjouczxbembim/settings/integrations` — the same project `backend/.env`'s `DATABASE_URL` points at. Nobody in this workstream installed it; it was already connected.
+
+It skipped because the repository has no `supabase/` directory and no `config.toml`, so the integration found no declared migrations to apply. That is the only reason. The integration is live, not dormant: if a `supabase/migrations/` tree ever appears — which is a plausible future step, since the Supabase CLI is the normal way to manage that project — the App would begin acting on the production-track project automatically, per pull request, from a **public** repository where anyone can open a PR.
+
+This is a different exposure from DEBT-040. That one is about a connection this codebase makes; this one is about a connection something else makes on this codebase's behalf, on a trigger the repository does not control.
+
+**What needs deciding:**
+
+| Option | Effect |
+| --- | --- |
+| Disconnect the integration | Removes the trigger entirely. Costs nothing today, because it is doing nothing today. |
+| Keep it, and make the repository private | Removes "anyone can open a PR" as the trigger surface. |
+| Keep it, and pin its branch/directory scope in the Supabase dashboard | Narrowest change, but leaves a live App on a public repo. |
+
+Related: the repository being public is itself worth an explicit decision rather than a default — `.env.production.example` documents the exact pooler host and project-ref format, and a public repo means every future push is one `.gitignore` gap away from a permanent disclosure. A history scan run before pushing found no committed credential (no `.env` ever tracked, no cert/key files, no OpenAI key, no 64-hex JWT secrets; the only `sk-` token in history is the deliberate test constant in `ai.module.spec.ts`), so nothing is leaked today — but that scan was a targeted regex pass, not gitleaks, and it says nothing about tomorrow.
+
+**Source:** `gh pr checks 1`, the absence of `supabase/` and `config.toml` in the tree, `gh repo view` reporting `visibility=PUBLIC`.
+
+**Status:** Open — needs an owner decision, not engineering. Not currently doing anything, which is exactly why it is easy to fix now and awkward to discover later.
+
+---
+
+## Resolved
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*

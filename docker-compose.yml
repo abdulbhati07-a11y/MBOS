@@ -1,0 +1,229 @@
+# =============================================================================
+# MBOS — Docker Compose
+#
+# Two long-running services (backend, frontend) plus optional profiles:
+#   - `local-db` brings up a pgvector-enabled Postgres for a fully-local
+#     stack; bring it up with `docker compose --profile local-db up`.
+#     Production never uses this — the database is Supabase.
+#   - `migrate` runs `prisma migrate deploy` as a one-shot and exits. This
+#     is the ONLY thing that applies migrations: the backend container does
+#     not migrate on boot. It is a required step of every release, not an
+#     optional convenience — see docs/deployment.md §3.1.
+#
+# By default `docker compose up` brings up the app talking to whatever
+# `DATABASE_URL` is in `.env.production`. The committed
+# `.env.production.example` documents every variable and defaults
+# DATABASE_URL to the Supabase connection string. To run a fully-local
+# stack, copy the example, point DATABASE_URL at the local `db` service,
+# and add `--profile local-db`.
+#
+# All environment is passed through `.env.production` (gitignored). Override
+# individual values from the shell with `KEY=value docker compose up` —
+# compose's precedence is shell > env_file > defaults in this file.
+#
+# Databases behind a private CA (Supabase) additionally need the overlay
+# `docker-compose.supabase.yml`, which mounts the downloaded root cert. See
+# that file's header and docs/supabase-setup.md.
+# =============================================================================
+
+# Use the modern compose spec. `name` gives the project a stable namespace
+# so the network and volume names are predictable (`mbos_db_data` rather
+# than `<cwd>_db_data`).
+name: mbos
+
+services:
+  # ---------------------------------------------------------------------------
+  # Local Postgres — DEV/TEST ONLY.
+  #
+  # The production database is Supabase. The `db` service is included so a
+  # fresh checkout can `docker compose up` against a fully-local stack
+  # without an external account, but it is OFF by default — bring it up
+  # explicitly with `docker compose --profile local-db up` and set
+  # `DATABASE_URL=postgresql://...@db:5432/...` in `.env.production`.
+  #
+  # The default `DATABASE_URL` in `.env.production.example` points at
+  # Supabase. Supabase mandates TLS server-side — it refuses a plaintext
+  # session outright — so `?sslmode=require` is not needed and is in fact
+  # REJECTED at startup by `buildPgConfig`: pg-connection-string turns it
+  # into an `ssl` object that replaces the pinned CA. Add
+  # `?pgbouncer=true&connection_limit=1` only when going through the
+  # transaction pooler (serverless / single-connection environments). The
+  # image used here is `pgvector/pgvector:pg17` because the smart_search
+  # migration needs the vector extension; Supabase already has it on — see
+  # DEBT-035 for the column-size coupling and the backfill story.
+  # ---------------------------------------------------------------------------
+  db:
+    # `pgvector/pgvector:pg17` is the upstream pgvector project image:
+    # stock `postgres:17-alpine` does NOT include the vector extension,
+    # and the 20260830000000_smart_search_pgvector migration will fail
+    # at `CREATE EXTENSION IF NOT EXISTS vector` without it.
+    image: pgvector/pgvector:pg17
+    profiles: ["local-db"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mbos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mbos}
+      POSTGRES_DB: ${POSTGRES_DB:-mbos}
+    # The DB is not exposed on the host by default. The backend reaches
+    # it through the compose network on 5432. To debug with `psql`,
+    # `docker compose exec db psql -U mbos -d mbos`.
+    expose:
+      - "5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mbos} -d ${POSTGRES_DB:-mbos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Backend (NestJS + Prisma).
+  #
+  # `env_file` carries the production secrets. `DATABASE_URL` is the
+  # operator's responsibility (Supabase for production, the `db` service
+  # for the local-db profile); the backend does not override it here.
+  # Compose's `depends_on: condition: service_healthy` only applies when
+  # the `db` service is actually started (the local-db profile). With
+  # the default profile, the backend connects to Supabase directly.
+  #
+  # NO CA CERT IS WIRED IN HERE, deliberately. Compose has no concept of an
+  # optional bind mount: naming a host file that does not exist either fails
+  # `up` or (on some daemons) silently mounts a directory in its place, so a
+  # fresh clone without a downloaded cert could not start at all. Databases
+  # with a private CA — Supabase — get their cert from the companion overlay
+  # `docker-compose.supabase.yml`. See that file's header for usage.
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: mbos-backend:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      PORT: 3001
+      NODE_ENV: production
+      # The per-IP rate limits (DEBT-013) are only sound if req.ip is
+      # trustworthy. The compose network is the trusted hop; behind a
+      # real reverse proxy, set TRUST_PROXY to that proxy's IP/CIDR.
+      TRUST_PROXY: "loopback"
+    # `depends_on` is unconditional — compose will only wait for the
+    # healthcheck when the `db` service is actually present (the
+    # local-db profile). The long form with `required: false` (compose
+    # v2.20+) silences the "service not found" warning that would
+    # otherwise fire on the default profile.
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    # Port 3001 is exposed on the host so a browser can reach the API at
+    # http://localhost:3001 directly. In a real deploy this would be
+    # internal-only and terminated by a reverse proxy; the README +
+    # docs/deployment.md say so.
+    ports:
+      - "3001:3001"
+    healthcheck:
+      # The Dockerfile already declares a HEALTHCHECK, but compose's
+      # `healthcheck:` key is what gates the `depends_on: condition:
+      # service_healthy` for the frontend. The two must match.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/v1/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Frontend (Next 16 standalone).
+  #
+  # The browser sees the frontend at the host port 3000. The browser calls
+  # the API at NEXT_PUBLIC_API_URL — for a local dev stack, that is
+  # http://localhost:3001. For a real deploy, set it to the public API
+  # origin (e.g. https://api.yourdomain.com). The URL is inlined into
+  # the JS bundle at build time, so changing it requires a rebuild.
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # The build arg is exposed by the frontend Dockerfile as
+        # NEXT_PUBLIC_API_URL. The default below works for a local
+        # `docker compose up` against the host loopback. Override with
+        # `--build-arg NEXT_PUBLIC_API_URL=https://api.example.com` on
+        # the real deploy.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+        # Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+        # Bake a stable value per environment so rolling deploys do not
+        # invalidate in-flight Server Actions.
+        NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:?NEXT_SERVER_ACTIONS_ENCRYPTION_KEY required}
+    image: mbos-frontend:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      # Next's standalone server answers GET / with a redirect or 200
+      # for the home page. We check the response code only; the body
+      # is a streaming HTML response and wget's `-qO-` will block on
+      # the streaming. `--spider` does a HEAD-equivalent and exits on
+      # the status line.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # One-shot migration runner — the ONLY thing in this stack that applies
+  # migrations. The backend container does not migrate on boot (see
+  # backend/docker-entrypoint.sh and DEBT-040). Run this once per release,
+  # BEFORE bringing the new containers up:
+  #
+  #   docker compose --profile migrate run --rm migrate
+  #   docker compose up -d
+  #
+  # `scripts/deploy.sh` runs that sequence for you and refuses to start the
+  # app if the migration step fails.
+  #
+  # It starts the backend image, runs `prisma migrate deploy` against the
+  # database, and exits; `--rm` removes the throwaway container. The backend
+  # and frontend services are not started in this mode.
+  #
+  # Exactly one container runs here regardless of how many backend replicas
+  # follow, so there is no concurrent-DDL race. Prisma additionally takes a
+  # Postgres advisory lock for the duration and records applied migrations in
+  # `_prisma_migrations`, so a second invocation is a no-op rather than a
+  # conflict.
+  #
+  # As with `backend`, no CA cert is wired in here — see the overlay
+  # `docker-compose.supabase.yml`, which extends this service too.
+  # ---------------------------------------------------------------------------
+  migrate:
+    profiles: ["migrate"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: mbos-backend:latest
+    env_file:
+      - .env.production
+    # Replace the image's entrypoint entirely so only the migrate command
+    # runs; the API is never started in this mode. `entrypoint:` (rather
+    # than `command:`) is deliberate — it overrides argv outright and stays
+    # correct no matter what the Dockerfile's ENTRYPOINT/CMD becomes.
+    # `migrate deploy` exits 0 on success; `restart: "no"` is what makes
+    # this a one-shot — the container exits, --rm removes it, no restart
+    # loop. DATABASE_URL comes from env_file (Supabase in production, the
+    # local-db service when run with both profiles).
+    entrypoint: ["npx", "prisma", "migrate", "deploy", "--schema=prisma/schema.prisma"]
+    restart: "no"
+
+volumes:
+  # Named explicitly so `docker compose down` does not drop the database.
+  db_data:

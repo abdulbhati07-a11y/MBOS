@@ -17,8 +17,13 @@
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "test:cov": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "db:seed": "nest build && node dist/prisma/seed.js"
+    "e2e:db:up": "docker compose -f ../docker-compose.test.yml up -d --wait",
+    "e2e:db:down": "docker compose -f ../docker-compose.test.yml down -v",
+    "e2e:db:prepare": "prisma migrate deploy --schema=prisma/schema.prisma && npm run db:seed",
+    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
+    "test:e2e:local": "node test/run-e2e.mjs",
+    "db:seed": "nest build && node dist/prisma/seed.js",
+    "ai:reembed": "nest build && node dist/ai/reembed-all.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -33,6 +38,8 @@
     "class-validator": "0.14.2",
     "cookie-parser": "1.4.7",
     "helmet": "^8.3.0",
+    "nodemailer": "^9.0.6",
+    "openai": "^4.0.0",
     "pg": "^8.23.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -47,6 +54,7 @@
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
+    "@types/nodemailer": "^8.0.1",
     "@types/supertest": "^7.0.0",
     "dotenv": "^17.4.2",
     "eslint": "^9.18.0",
@@ -73,6 +81,10 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "\\.e2e\\.spec\\.ts$"
+    ],
     "moduleNameMapper": {
       "^(\\.{1,2}/.*)\\.js$": "$1"
     },

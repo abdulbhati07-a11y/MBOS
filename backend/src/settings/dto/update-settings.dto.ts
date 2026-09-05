@@ -38,11 +38,20 @@ export class UpdateSettingsDto {
   @Max(MAX_TAX_RATE_BPS)
   defaultTaxRateBps?: number;
 
-  /** ISO 4217: exactly three uppercase letters. One currency per tenant (C-01). */
+  /**
+   * ISO 4217: exactly three uppercase letters. One currency per tenant (C-01),
+   * defaulting to PKR.
+   *
+   * Changing this does not convert anything. Every money column stores minor
+   * units of whatever this says, so switching a tenant with existing orders from
+   * PKR to USD would reinterpret 299900 paisa as $2,999.00 — the digits stay and
+   * the meaning moves. Section 6.4 does not define a conversion endpoint, so in
+   * practice this is a setup-time choice.
+   */
   @IsOptional()
   @IsString()
   @Matches(/^[A-Z]{3}$/, {
-    message: 'currencyCode must be a three-letter ISO 4217 code, e.g. USD',
+    message: 'currencyCode must be a three-letter ISO 4217 code, e.g. PKR',
   })
   currencyCode?: string;
 
@@ -55,7 +64,7 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsString()
   @Matches(/^(UTC|[A-Za-z_]+\/[A-Za-z0-9_+\-/]+)$/, {
-    message: 'timezone must be an IANA zone name, e.g. America/New_York or UTC',
+    message: 'timezone must be an IANA zone name, e.g. Asia/Karachi or UTC',
   })
   timezone?: string;
 }

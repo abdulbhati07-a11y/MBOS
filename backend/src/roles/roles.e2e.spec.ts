@@ -21,7 +21,8 @@ import { PermissionEntry, RoleResponse } from './dto/role.dto';
  * write to one would corrupt every other suite's expectations — several of the
  * assertions below exist precisely to prove the API refuses such writes.
  *
- * Requires `npm run db:seed` to have run against DATABASE_URL in backend/.env.
+ * Run with `npm run test:e2e:local` (throwaway pgvector container, migrated and
+ * seeded). test/guard-database.ts refuses any non-disposable DATABASE_URL.
  */
 
 interface ErrorEnvelope {
@@ -258,9 +259,7 @@ describe('Roles (e2e)', () => {
     it('soft-deletes an unheld custom role', async () => {
       const role = await createRole(`${ROLE_PREFIX} Deletable`);
 
-      await del(`/api/v1/roles/${role.id}`)
-        .set(authed(ownerToken))
-        .expect(200);
+      await del(`/api/v1/roles/${role.id}`).set(authed(ownerToken)).expect(200);
 
       const list = await get('/api/v1/roles?pageSize=100')
         .set(authed(ownerToken))
@@ -299,7 +298,9 @@ describe('Roles (e2e)', () => {
       const first = await createRole(`${ROLE_PREFIX} Recycled`);
       await put(`/api/v1/roles/${first.id}/permissions`)
         .set(authed(ownerToken))
-        .send({ permissions: [{ module: 'sales', action: 'read', granted: true }] })
+        .send({
+          permissions: [{ module: 'sales', action: 'read', granted: true }],
+        })
         .expect(200);
       await del(`/api/v1/roles/${first.id}`)
         .set(authed(ownerToken))
@@ -324,15 +325,15 @@ describe('Roles (e2e)', () => {
       await del(`/api/v1/roles/${ABSENT_UUID}`)
         .set(authed(ownerToken))
         .expect(404);
-      await del('/api/v1/roles/not-a-uuid')
-        .set(authed(ownerToken))
-        .expect(400);
+      await del('/api/v1/roles/not-a-uuid').set(authed(ownerToken)).expect(400);
     });
   });
 
   describe('GET /roles/:id/permissions', () => {
     it('returns the complete grid, including denials', async () => {
-      const res = await get(`/api/v1/roles/${await builtInId('Cashier')}/permissions`)
+      const res = await get(
+        `/api/v1/roles/${await builtInId('Cashier')}/permissions`,
+      )
         .set(authed(ownerToken))
         .expect(200);
 
@@ -350,7 +351,9 @@ describe('Roles (e2e)', () => {
     });
 
     it('scopes refund to sales only', async () => {
-      const res = await get(`/api/v1/roles/${await builtInId('Owner')}/permissions`)
+      const res = await get(
+        `/api/v1/roles/${await builtInId('Owner')}/permissions`,
+      )
         .set(authed(ownerToken))
         .expect(200);
 
@@ -362,7 +365,8 @@ describe('Roles (e2e)', () => {
         .map((e) => e.module);
       expect(refundModules).toEqual(['sales']);
       expect(
-        data.find((e) => e.module === 'sales' && e.action === 'refund')?.granted,
+        data.find((e) => e.module === 'sales' && e.action === 'refund')
+          ?.granted,
       ).toBe(true);
     });
 
@@ -375,14 +379,20 @@ describe('Roles (e2e)', () => {
 
   describe('PUT /roles/:id/permissions', () => {
     it('refuses to modify a built-in role with 403', async () => {
-      const res = await put(`/api/v1/roles/${await builtInId('Manager')}/permissions`)
+      const res = await put(
+        `/api/v1/roles/${await builtInId('Manager')}/permissions`,
+      )
         .set(authed(ownerToken))
-        .send({ permissions: [{ module: 'sales', action: 'read', granted: true }] })
+        .send({
+          permissions: [{ module: 'sales', action: 'read', granted: true }],
+        })
         .expect(403);
       expect(bodyOf<ErrorEnvelope>(res).error.message).toMatch(/built-in/i);
 
       // And the canonical matrix is untouched — Manager still reads reports.
-      const check = await get(`/api/v1/roles/${await builtInId('Manager')}/permissions`)
+      const check = await get(
+        `/api/v1/roles/${await builtInId('Manager')}/permissions`,
+      )
         .set(authed(ownerToken))
         .expect(200);
       expect(

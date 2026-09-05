@@ -2,7 +2,10 @@
 // MBOS Prisma Schema
 // Implements every table from docs/section-5-database-design.md exactly.
 // Naming conventions per Section 5.10:
-//   - Monetary columns: *Cents suffix, Int type
+//   - Monetary columns: *Cents suffix, Int type. The suffix is Section 5.10's
+//     wording and predates the currency decision — the columns hold minor units
+//     of TenantSettings.currencyCode (paisa for the default PKR), not cents of
+//     anything. See DEBT-023 and backend/src/common/validation/money.ts.
 //   - Snapshot columns: *Snapshot suffix
 //   - Soft delete: deletedAt DateTime?
 //   - isActive Boolean @default(true) where specified
@@ -66,13 +69,21 @@ model Tenant {
 }
 
 /// 1:1 extension of Tenant for mutable company config (resolves DEBT-008).
-/// defaultTaxRateBps pre-fills NewOrderForm at session start.
-/// currencyCode is ISO 4217 — never store the display symbol.
+/// defaultTaxRateBps pre-fills NewOrderForm at session start. It defaults to 0
+/// rather than Pakistan's 17% GST because a tax rate applied without the tenant
+/// having chosen it lands in order records BR-03 then freezes.
+/// currencyCode is ISO 4217 — never store the display symbol. PKR is the default
+/// because that is the market being built for; every money column holds minor
+/// units of *this* currency (paisa here), so changing it on a tenant that already
+/// has orders would reinterpret their history, not convert it.
+/// timezone stays UTC: it is the storage default, and Asia/Karachi belongs in the
+/// tenant's own settings rather than in a column default that also governs any
+/// non-PK tenant.
 model TenantSettings {
   tenantId          String   @id
   companyName       String   @default("")
   defaultTaxRateBps Int      @default(0)   // basis points; 800 = 8.00%
-  currencyCode      String   @default("USD") // ISO 4217
+  currencyCode      String   @default("PKR") // ISO 4217
   timezone          String   @default("UTC")
   updatedAt         DateTime @updatedAt
 
@@ -217,8 +228,8 @@ model Plan {
   id             String   @id @default(uuid())
   name           String   @unique
   description    String   @default("")
-  priceMonthly   Int      // cents
-  priceAnnual    Int      // cents
+  priceMonthly   Int      // minor units (paisa)
+  priceAnnual    Int      // minor units (paisa)
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -324,6 +335,17 @@ model Product {
   orderLines       OrderLine[]
   poLines          POLine[]
   stockAdjustments StockAdjustment[]
+
+  // Smart Search columns (migration 20260830000000_smart_search_pgvector).
+  // Managed by raw SQL, deliberately not mapped into the client: `vector` is a
+  // pgvector type the schema language cannot express, and the embedding is
+  // written only through EmbeddingService's parameterised SQL. `@ignore` keeps
+  // the columns out of the generated types so no feature module can read or
+  // write them by accident — the declared types below exist only to satisfy
+  // the validator and do not reach the client. See
+  // backend/src/ai/embedding.service.ts.
+  embedding      String? @ignore
+  embeddingText  String? @ignore
 
   @@unique([tenantId, sku])
   @@index([tenantId, category])

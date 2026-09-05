@@ -31,6 +31,11 @@ const CODE_BY_STATUS: Readonly<Record<number, string>> = {
   [HttpStatus.CONFLICT]: 'CONFLICT',
   [HttpStatus.UNPROCESSABLE_ENTITY]: 'VALIDATION_ERROR',
   [HttpStatus.TOO_MANY_REQUESTS]: 'RATE_LIMIT_EXCEEDED',
+  // 503 is what the readiness probe raises when the database is unreachable
+  // (AppService.getReadiness). Without an entry here it fell through to the
+  // generic 'ERROR', which told a monitoring system nothing about *why* the
+  // instance was unready.
+  [HttpStatus.SERVICE_UNAVAILABLE]: 'SERVICE_UNAVAILABLE',
 };
 
 /**
@@ -70,7 +75,17 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const payload = exception.getResponse();
     const body: ErrorBody = {
       error: {
-        code: CODE_BY_STATUS[status] ?? 'ERROR',
+        // A thrower may name its own code; the status-derived default covers
+        // everything else. Section 6.9 needs this — its invalid-transition case
+        // is specified as `409` with `code: "INVALID_STATUS_TRANSITION"`, which
+        // the status alone cannot express because a plain 409 is `CONFLICT`. A
+        // client distinguishing "wrong transition" from "PO number taken" would
+        // otherwise have to match on message text.
+        //
+        // It follows `retryAfter` below: the thrower puts the value in the
+        // payload and this filter decides how it reaches the wire, so the
+        // envelope still has exactly one author.
+        code: extractCode(payload) ?? CODE_BY_STATUS[status] ?? 'ERROR',
         message: extractMessage(payload, exception.message),
       },
     };
@@ -94,6 +109,25 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     response.status(status).json(body);
   }
+}
+
+/**
+ * An explicit `code` from the thrower, when it supplied one.
+ *
+ * Constrained to `A-Z0-9_` deliberately. The code is a contract token clients
+ * branch on, so this rejects a payload that happens to carry a `code` field
+ * meaning something else — a Prisma error code like `P2002`, or a nested DTO
+ * property — rather than passing it through as though it were a documented
+ * value. Anything rejected falls back to the status-derived default, so a
+ * malformed code degrades to a correct generic answer instead of an error.
+ */
+const CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+function extractCode(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const code = (payload as { code?: unknown }).code;
+  if (typeof code !== 'string' || !CODE_PATTERN.test(code)) return undefined;
+  return code;
 }
 
 function extractMessage(payload: unknown, fallback: string): string {

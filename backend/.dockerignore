@@ -1,0 +1,35 @@
+# =============================================================================
+# backend/.dockerignore
+#
+# The backend Dockerfile build context is the backend directory. Block test
+# source, generated Prisma client (re-generated in the build stage), the
+# .env file, VCS, IDE, and agent caches. Anything not in the result of
+# `prisma generate` + `nest build` is excluded.
+# =============================================================================
+
+# Generated Prisma client output. The Dockerfile runs `prisma generate` in
+# the build stage, so the source-tree copy is dead weight and risks a
+# stale-build stale-generation mismatch.
+/src/generated
+
+# VCS + IDE + agent caches.
+/.git
+/.gitignore
+/.vscode
+/.claude
+/.agents
+/.windsurf
+
+# Local environment. Container env comes from compose env_file.
+/.env
+.env.*
+
+# Build + test outputs that are recreated in the build stage, plus
+# source-tree files the container doesn't need at runtime.
+/dist
+/coverage
+*.tsbuildinfo
+
+# Test sources and the e2e jest config — they are exercised by the CI
+# workflow, not the production image.
+/test

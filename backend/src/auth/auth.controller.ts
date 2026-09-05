@@ -20,7 +20,9 @@ import {
   LoginResponse,
 } from './dto/auth-response.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { MfaVerifyDto } from './dto/mfa-verify.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 /** Section 6.3 puts the refresh token in a cookie, never in a response body. */
 export const REFRESH_COOKIE = 'mbos_refresh_token';
@@ -83,6 +85,33 @@ export class AuthController {
   ): Promise<void> {
     await this.auth.logout(readRefreshCookie(req));
     res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
+  }
+
+  /**
+   * Section 6.3 forgot-password (DEBT-015). Always 202 — the body and status
+   * are identical for a known and an unknown address, so responses cannot be
+   * used to enumerate accounts. Strictly rate-limited: this is a mail-sending
+   * endpoint reachable without authentication.
+   */
+  @Public()
+  @StrictRateLimit()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<void> {
+    await this.auth.forgotPassword(dto.email);
+  }
+
+  /**
+   * Section 6.3 reset-password (DEBT-015). 204 on success; an invalid, expired
+   * or already-used token is a 401 from the service. Strictly rate-limited so
+   * the token cannot be brute-forced through the endpoint.
+   */
+  @Public()
+  @StrictRateLimit()
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
+    await this.auth.resetPassword(dto.token, dto.password);
   }
 
   /**

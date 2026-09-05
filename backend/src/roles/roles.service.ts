@@ -8,15 +8,15 @@ import {
 import {
   PERMISSION_GRID,
   ROLE_MATRIX,
-  type Action,
-  type ModuleKey,
 } from '../access-control/access-control.constants';
+import { visibleRoleWhere } from '../access-control/role-visibility';
 import {
   PaginatedEnvelope,
   PaginationQueryDto,
   paginate,
   resolvePagination,
 } from '../common/dto/pagination.dto';
+import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantContextService } from '../tenancy/tenant-context.service';
 import {
@@ -93,7 +93,11 @@ export class RolesService {
     const tenantId = this.requireTenantId();
     const name = dto.name.trim();
 
-    if (BUILT_IN_NAMES.some((builtIn) => builtIn.toLowerCase() === name.toLowerCase())) {
+    if (
+      BUILT_IN_NAMES.some(
+        (builtIn) => builtIn.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
       throw new ConflictException(
         `"${name}" is the name of a built-in role. Choose a different name.`,
       );
@@ -110,7 +114,9 @@ export class RolesService {
 
     if (existing) {
       const [, revived] = await this.prisma.$transaction([
-        this.prisma.rolePermission.deleteMany({ where: { roleId: existing.id } }),
+        this.prisma.rolePermission.deleteMany({
+          where: { roleId: existing.id },
+        }),
         this.prisma.role.update({
           where: { id: existing.id },
           data: { deletedAt: null },
@@ -234,8 +240,8 @@ export class RolesService {
       .filter((entry) => entry.granted)
       .map((entry) => ({
         roleId: id,
-        module: entry.module as ModuleKey,
-        action: entry.action as Action,
+        module: entry.module,
+        action: entry.action,
         granted: true,
       }));
 
@@ -251,17 +257,12 @@ export class RolesService {
   }
 
   /**
-   * The filter defining "roles this tenant may see": global built-ins plus its
-   * own, never another tenant's, never soft-deleted.
+   * The filter defining "roles this tenant may see". Delegates to the shared
+   * `visibleRoleWhere` so this file and UsersService cannot drift apart — a
+   * divergence between them would be a cross-tenant hole.
    */
-  private visibleRoleFilter(): {
-    deletedAt: null;
-    OR: [{ tenantId: null }, { tenantId: string }];
-  } {
-    return {
-      deletedAt: null,
-      OR: [{ tenantId: null }, { tenantId: this.requireTenantId() }],
-    };
+  private visibleRoleFilter(): Prisma.RoleWhereInput {
+    return visibleRoleWhere(this.requireTenantId());
   }
 
   /**

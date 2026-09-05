@@ -234,7 +234,9 @@ export class BillingService {
       // as missing here; the assertion records that it is supplied by the
       // extension, not omitted — hence the UncheckedCreateInput (scalar
       // tenantId) shape rather than a `tenant` connect.
-      data: { moduleKey } as Prisma.TenantModuleSubscriptionUncheckedCreateInput,
+      data: {
+        moduleKey,
+      } as Prisma.TenantModuleSubscriptionUncheckedCreateInput,
     });
   }
 }

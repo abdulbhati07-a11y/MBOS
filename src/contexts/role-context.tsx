@@ -8,10 +8,18 @@
 // useCanPerform() — the single permission check hook used by all components.
 // useSetRole()    — write the current role (used by the AppShell toggle only).
 //
-// DEBT-006: RoleProvider is backed by React state, not a real auth/session.
-// The context shape (Role, canPerform(module, action)) is designed to accept
-// a real role derived from a JWT/session token without any API changes to
-// consumers. Swapping the state source is a Section 6/7 dependency.
+// DEBT-006 (resolved for built-in roles): the role is no longer invented here.
+// AppShell seeds `initialRole` from `GET /auth/me` via SessionProvider, so this
+// provider now holds a real, server-issued role. The context shape did not have
+// to change — which was the point of designing it this way.
+//
+// What remains: the *permission matrix* is still a frontend copy
+// (DEFAULT_ROLE_PERMISSIONS) hand-mirrored by the backend's ROLE_MATRIX, rather
+// than the RolePermission rows the API actually enforces. That holds for the
+// three built-in roles and fails closed for anything else — a role name with no
+// matrix entry makes canPerform return false for every module. Custom roles
+// (FR-SET-02) therefore render a dead UI until /auth/me returns the role's
+// permission set instead of just its name.
 // ---------------------------------------------------------------------------
 
 import * as React from "react"
@@ -35,9 +43,15 @@ const RoleContext = React.createContext<RoleContextValue | null>(null)
 
 // ---------------------------------------------------------------------------
 // Provider
-// Default role is "Manager" — matches the prior per-page toggle default,
-// so existing behaviour is unchanged on first render.
-// TODO: replace default with role derived from auth session (Section 6/7).
+//
+// `initialRole` is normally supplied by AppShell from the session. The "Manager"
+// default is only a fallback for a provider mounted outside a session — tests,
+// Storybook-style harnesses, the /dev routes — and is never what a real user
+// gets. A one-shot initial value is enough because SessionGate guarantees the
+// session has resolved before AppShell (and therefore this provider) mounts.
+//
+// `useSetRole` exists for the dev-only "view as role" override in the header. It
+// changes what the UI offers, not what the API allows.
 // ---------------------------------------------------------------------------
 export function RoleProvider({
   children,
