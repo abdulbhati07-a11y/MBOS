@@ -230,10 +230,20 @@ that the wrong shape:
 
 The consequence to be aware of: nothing now auto-applies a pending
 migration. If you roll out an image whose code expects a column that was
-never migrated, the app will fail against the old schema and readiness
-will stay red. That is the intended loud failure, but it does mean the
-migrate step is not skippable. Use `scripts/deploy.sh` rather than a bare
-`docker compose up -d`.
+never migrated, **the backend refuses to finish booting** — a boot-time
+check (`backend/src/prisma/schema-version.service.ts`) compares the
+migrations baked into the image against `_prisma_migrations` and aborts
+with the list of what is missing and the command that applies it. That
+check runs over the application's own CA-verified pg connection, never
+Prisma's schema engine, so it restores the "never serve on an old schema"
+guarantee without re-opening the unverified-TLS window that
+migrating-on-boot created.
+
+`SKIP_SCHEMA_VERSION_CHECK="true"` forces a boot against a schema you know
+is behind. It exists for emergencies and logs a warning; queries against
+the missing columns will still fail.
+
+Use `scripts/deploy.sh` rather than a bare `docker compose up -d`.
 
 ### 3.3 Local development (no Supabase)
 

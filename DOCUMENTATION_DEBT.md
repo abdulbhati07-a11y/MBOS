@@ -978,7 +978,7 @@ For precision on one term in the acceptance above: the "CI/deploy runner" is, to
 
 ---
 
-### DEBT-041 — nothing in the container graph enforces "migrate before boot"; the ordering is script- and documentation-only
+### DEBT-041 — nothing enforced "migrate before boot" (resolved by a boot-time schema-version check)
 
 **Where it needs to land:** Section 4.8 (deployment), wherever the release procedure is described.
 
@@ -1001,11 +1001,25 @@ A bare `docker compose up -d` still starts the app without migrating. The failur
 | `depends_on: migrate: {condition: service_completed_successfully}` on `backend`, with `migrate` out of the profile. | Compose itself would refuse to start the backend until the migration container exited 0. Needs verifying against the installed compose version: whether a *completed* one-shot re-runs on a subsequent `up`, and how the condition interacts with `profiles`, is version-dependent and was **not** tested. | Small, but needs a real compose run to confirm semantics |
 | A boot-time schema-version assertion in the app, over the **already-verified** pg pool (compare the latest row in `_prisma_migrations` against the migration directories baked into the image; refuse to start on a mismatch). | Restores the "never serve on a stale schema" guarantee without reintroducing the DEBT-040 exposure, because it uses the driver-adapter connection, not the schema engine. | Moderate: new startup check plus tests |
 
-The third option is the one that actually restores the lost guarantee; it is deliberately not implemented in the same change as the (b) mitigation to keep that change reviewable.
+**Resolved by** the third option — the one that actually restores the lost guarantee rather than papering over it with more documentation.
 
-**Source:** `backend/docker-entrypoint.sh`, `backend/Dockerfile`, `docker-compose.yml`, `scripts/deploy.sh`, `docs/deployment.md` §3.2. Related: DEBT-040.
+`backend/src/prisma/schema-version.service.ts` runs on `onApplicationBootstrap` (after every module's init hook, still before `app.listen()`), reads the migration directories baked into the image, queries `_prisma_migrations`, and throws if any shipped migration is not recorded as successfully applied. The error names the missing migrations and the command that applies them.
 
-**Status:** Open — introduced knowingly as a consequence of the DEBT-040 (b) mitigation, logged rather than silently absorbed. Not blocking; revisit alongside DEBT-040's Phase 5 closure, since both touch the deploy path.
+Three details that matter:
+
+- **It uses the verified connection.** The query goes through `PrismaService` — the pg driver adapter, which pins the CA and checks the server certificate. Prisma's schema engine, the component that cannot authenticate the server at all, is never invoked. So this restores "never serve on an old schema" without re-opening the DEBT-040 window that migrating-on-boot created. That is the whole reason this option was chosen over the other two.
+- **A row in `_prisma_migrations` is not success.** Prisma inserts the row when a migration *starts*, so a crash part-way through the DDL leaves `finished_at` null. That state is reported as `failed`, not `applied`, and gets its own message pointing at `prisma migrate resolve` — a partially-migrated database needs a human, not a retry.
+- **A database *ahead* of the build warns rather than fails.** During a rolling deploy an old instance briefly runs against the new schema, which additive migrations make safe. A persistent warning there means a rollback left code behind its data.
+
+`SKIP_SCHEMA_VERSION_CHECK="true"` is the documented emergency override; it logs a warning. A missing `prisma/migrations` directory is reported as a packaging fault and explicitly does **not** count as a pass — "cannot compare" is not "compared and matched".
+
+Covered by 12 unit tests in `src/prisma/schema-version.spec.ts`, including the skipped-migrate-step case this entry was opened for, the never-migrated database, the half-applied migration, and a test asserting the real `prisma/migrations` path still resolves — so if that directory ever moves, it fails in CI rather than silently disabling the production boot check.
+
+The `depends_on: service_completed_successfully` option from the table above was not taken: its semantics across compose versions (whether a completed one-shot re-runs on a subsequent `up`, and how the condition interacts with `profiles`) could not be verified here, and an application-level check is a stronger guarantee anyway — it holds for every start path, not just `docker compose up`.
+
+**Source:** `backend/src/prisma/schema-version.ts`, `backend/src/prisma/schema-version.service.ts`, `backend/src/prisma/prisma.module.ts`, `backend/docker-entrypoint.sh`, `scripts/deploy.sh`, `docs/deployment.md` §3.2. Related: DEBT-040.
+
+**Status:** Resolved — the guarantee lost to the DEBT-040 (b) mitigation is restored at the application layer, over the verified connection. `scripts/deploy.sh` and the docs still describe the ordering; the difference is that skipping it is now a refused boot rather than a runtime surprise.
 
 ---
 
