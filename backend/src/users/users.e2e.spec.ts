@@ -19,7 +19,8 @@ import { UserResponse } from './dto/user.dto';
  * tokens. It never touches owner@dev.local, whose tokens the auth suite
  * manipulates.
  *
- * Requires `npm run db:seed` to have run against DATABASE_URL in backend/.env.
+ * Run with `npm run test:e2e:local` (throwaway pgvector container, migrated and
+ * seeded). test/guard-database.ts refuses any non-disposable DATABASE_URL.
  */
 
 interface ErrorEnvelope {

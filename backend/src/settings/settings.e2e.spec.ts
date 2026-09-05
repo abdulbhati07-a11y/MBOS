@@ -25,7 +25,8 @@ import {
  * the tenant exactly as it found it and can re-run. Its own users and branches are
  * name-prefixed and removed outright.
  *
- * Requires `npm run db:seed` to have run against DATABASE_URL in backend/.env.
+ * Run with `npm run test:e2e:local` (throwaway pgvector container, migrated and
+ * seeded). test/guard-database.ts refuses any non-disposable DATABASE_URL.
  */
 
 interface ErrorEnvelope {

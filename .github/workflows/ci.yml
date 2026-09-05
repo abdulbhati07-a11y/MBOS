@@ -1,11 +1,14 @@
 # GitHub Actions CI pipeline for MBOS
 #
 # Three jobs run in parallel:
-#   1. backend  - lint, build, and unit-test the NestJS API
-#   2. frontend - lint and build the Next.js app
-#   3. e2e      - (workflow_dispatch only) spin up Postgres + run e2e suites
+#   1. backend     - lint, build, and unit-test the NestJS API
+#   2. frontend    - lint and build the Next.js app
+#   3. backend-e2e - ephemeral pgvector Postgres, migrate, seed, run e2e suites
 #
-# Triggers: push to main + every PR. E2E is opt-in to keep PR CI fast.
+# Triggers: push to main + every PR. All three jobs run on every PR — the e2e
+# job included, now that it is safe: it can only reach the per-run service
+# container (test/guard-database.ts refuses anything else) and can only bind the
+# no-op AI provider (src/config/test-environment.ts).
 name: CI
 
 on:
@@ -61,8 +64,12 @@ jobs:
         run: npm run build
 
       - name: Unit tests
-        # Unit tests only — e2e suite needs a live DB and runs in its own job.
-        run: npm test -- --testPathIgnorePatterns=e2e-spec
+        # Unit tests only. The exclusion lives in package.json's jest
+        # `testPathIgnorePatterns` — do NOT pass --testPathIgnorePatterns here,
+        # a CLI flag REPLACES the config array rather than adding to it, which
+        # is how the previous `--testPathIgnorePatterns=e2e-spec` both failed to
+        # match (dot vs hyphen) and masked the config.
+        run: npm test
 
   # ---------------------------------------------------------------------------
   # Frontend: lint, build
@@ -98,19 +105,32 @@ jobs:
         run: npm run build
 
   # ---------------------------------------------------------------------------
-  # E2E: spin up Postgres, run migrations, run e2e suites
-  # Only on workflow_dispatch to keep PR CI fast and not burn minutes.
+  # E2E: ephemeral pgvector Postgres, migrate, seed, run the e2e suites.
+  #
+  # Runs on every PR. The service container below is created and destroyed by
+  # the runner per job, which is what makes "ephemeral" structural rather than a
+  # promise: there is no persistent volume and no way for one run to see
+  # another's rows.
+  #
+  # Two guards make this safe to run unattended, and both fail loud:
+  #   - test/guard-database.ts refuses any DATABASE_URL host that is not a
+  #     recognised throwaway (and refuses Supabase unconditionally).
+  #   - src/config/test-environment.ts forces the no-op AI provider whenever
+  #     JEST_WORKER_ID is set, so no test can reach a paid external API.
   # ---------------------------------------------------------------------------
   backend-e2e:
     name: Backend E2E
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
     defaults:
       run:
         working-directory: backend
     services:
       postgres:
-        image: postgres:17-alpine
+        # pgvector, NOT postgres:17-alpine. The smart-search migration opens
+        # with `CREATE EXTENSION IF NOT EXISTS vector`, which stock Postgres
+        # cannot satisfy — so this job could never have migrated successfully
+        # on the previous image. Matches docker-compose.test.yml.
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -123,11 +143,19 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      # localhost is on guard-database.ts's allow-list. Anything else aborts
+      # the run before a single worker starts.
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mbos_test
       JWT_ACCESS_SECRET: ci-access-secret-not-for-production-use-64-bytes-long
       JWT_REFRESH_SECRET: ci-refresh-secret-not-for-production-use-64-bytes-long
-      NODE_ENV: development
+      NODE_ENV: test
       SEED_DEV_TENANT: 'true'
+      # Deliberate sentinel, and a regression test for the provider guard: a
+      # key IS present here. AIModule must still bind the no-op because
+      # isTestEnvironment() is true. If that guard ever regresses, the suite
+      # starts issuing 401s at api.openai.com and this job fails — which is
+      # exactly the alarm we want. The value is not a credential.
+      AI_API_KEY: ci-sentinel-key-must-never-be-used-by-any-test
     steps:
       - name: Checkout
         uses: actions/checkout@v4

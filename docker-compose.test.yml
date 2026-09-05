@@ -1,0 +1,69 @@
+# =============================================================================
+# MBOS — ephemeral test database
+#
+# A throwaway pgvector Postgres for the e2e suites. Brought up before a run,
+# destroyed after it. Nothing here is ever a deployment target.
+#
+# Usage (from backend/):
+#
+#   npm run test:e2e:local      # up -> migrate -> seed -> run -> down
+#
+# or by hand, from the repo root:
+#
+#   docker compose -f docker-compose.test.yml up -d --wait
+#   docker compose -f docker-compose.test.yml down -v
+#
+# ## Why a separate file rather than a profile in docker-compose.yml
+#
+# The base compose file reads `.env.production` and describes a deployment. A
+# test database must not be reachable from anything that resolves production
+# environment, must not share the `mbos` project namespace (so `docker compose
+# down` on a deployment can never take it, and vice versa), and must not survive
+# a run. Keeping it in its own file with its own project name makes all three
+# structural rather than conventional.
+#
+# ## Why pgvector/pgvector:pg17 and not postgres:17-alpine
+#
+# `20260830000000_smart_search_pgvector` opens with
+# `CREATE EXTENSION IF NOT EXISTS vector`, which fails on stock Postgres. The CI
+# job used the stock image, so the e2e job could never have applied migrations
+# even once it was enabled.
+#
+# ## Why port 55432
+#
+# 5432 is commonly occupied by a developer's own Postgres install (it is on the
+# machine this was written on — PostgreSQL 18 as a Windows service). Binding the
+# throwaway container to a distinctive port removes a whole class of "why is my
+# test data in my dev database" confusion.
+# =============================================================================
+
+# Own project namespace — never `mbos`. `docker compose down` on the deployment
+# stack cannot touch this, and `down -v` here cannot touch the deployment.
+name: mbos-test
+
+services:
+  test-db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mbos_test
+    ports:
+      # host 55432 -> container 5432. DATABASE_URL for the suites is
+      # postgresql://postgres:postgres@127.0.0.1:55432/mbos_test?schema=public
+      - "127.0.0.1:55432:5432"
+    # tmpfs, not a named volume: the data directory lives in RAM and is gone
+    # when the container stops, so a run can never inherit state from the
+    # previous one. It is also markedly faster, which matters when every run
+    # re-applies the full migration history.
+    tmpfs:
+      - /var/lib/postgresql/data
+    # `up --wait` blocks until this reports healthy, so the migrate step never
+    # races the server's first-boot initialisation.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mbos_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: "no"

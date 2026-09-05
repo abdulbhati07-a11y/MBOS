@@ -9,8 +9,9 @@ import { TenantContextService } from '../tenancy/tenant-context.service';
 
 /**
  * Integration test for row-level tenant isolation (Section 4.3). Runs against
- * the DATABASE_URL in backend/.env — a disposable dev instance (C-05). Every
- * row it creates is removed in afterAll.
+ * the ephemeral e2e database (`npm run test:e2e:local`). Every row it creates is
+ * removed in afterAll; test/guard-database.ts guarantees the target is
+ * disposable in the first place (C-05).
  */
 describe('tenant scope extension', () => {
   let prisma: PrismaService;

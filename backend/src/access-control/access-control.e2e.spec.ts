@@ -37,7 +37,8 @@ import {
  * were over-granted by the old seed, so a failure here means the surplus grants
  * have come back.
  *
- * Requires `npm run db:seed` to have run against the DATABASE_URL in backend/.env.
+ * Run with `npm run test:e2e:local` (throwaway pgvector container, migrated and
+ * seeded). test/guard-database.ts refuses any non-disposable DATABASE_URL.
  */
 @Controller('test-access')
 class TestAccessController {

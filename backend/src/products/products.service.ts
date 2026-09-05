@@ -143,12 +143,14 @@ export class ProductsService {
         data: { ...data, deletedAt: null },
         select: PRODUCT_SELECT,
       });
-      // Fire-and-forget Smart Search sync (post-commit, fail-soft — see
-      // EmbeddingService). Not awaited: the create response must not wait on
-      // a network embedding call, and a failure there logs but never 500s.
-      void this.embedding
-        .syncProduct(this.tenantContext.getTenantId() ?? '', revived)
-        .catch(() => undefined);
+      // Detached Smart Search sync (post-commit, fail-soft — see
+      // EmbeddingService). Not awaited: the create response must not wait on a
+      // network embedding call. Tracked, not abandoned — EmbeddingService
+      // drains outstanding work on shutdown.
+      this.embedding.syncProductDetached(
+        this.tenantContext.getTenantId() ?? '',
+        revived,
+      );
       return toResponse(revived);
     }
 
@@ -160,9 +162,10 @@ export class ProductsService {
       } as Prisma.ProductUncheckedCreateInput,
       select: PRODUCT_SELECT,
     });
-    void this.embedding
-      .syncProduct(this.tenantContext.getTenantId() ?? '', created)
-      .catch(() => undefined);
+    this.embedding.syncProductDetached(
+      this.tenantContext.getTenantId() ?? '',
+      created,
+    );
     return toResponse(created);
   }
 
@@ -203,9 +206,10 @@ export class ProductsService {
     });
     // Text fields may have changed; keep the embedding in step (fail-soft,
     // post-commit — see EmbeddingService).
-    void this.embedding
-      .syncProduct(this.tenantContext.getTenantId() ?? '', updated)
-      .catch(() => undefined);
+    this.embedding.syncProductDetached(
+      this.tenantContext.getTenantId() ?? '',
+      updated,
+    );
     return toResponse(updated);
   }
 
@@ -248,9 +252,10 @@ export class ProductsService {
     });
     // The product left the searchable catalogue; drop its vector so the HNSW
     // index stays free of dead rows (fail-soft, post-commit).
-    void this.embedding
-      .clearProduct(this.tenantContext.getTenantId() ?? '', id)
-      .catch(() => undefined);
+    this.embedding.clearProductDetached(
+      this.tenantContext.getTenantId() ?? '',
+      id,
+    );
     return toResponse(deleted);
   }
 

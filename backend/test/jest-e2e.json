@@ -1,9 +1,27 @@
 {
-  "moduleFileExtensions": ["js", "json", "ts"],
-  "rootDir": ".",
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
+  "rootDir": "..",
+  "roots": [
+    "<rootDir>/src"
+  ],
   "testEnvironment": "node",
-  "testRegex": ".e2e-spec.ts$",
+  "testRegex": "\\.e2e\\.spec\\.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
-  }
+  },
+  "moduleNameMapper": {
+    "^(\\.{1,2}/.*)\\.js$": "$1"
+  },
+  "globalSetup": "<rootDir>/test/jest-global-setup.ts",
+  "setupFiles": [
+    "<rootDir>/test/jest-setup-e2e.ts"
+  ],
+  "testTimeout": 30000,
+  "maxWorkers": 1,
+  "forceExit": false,
+  "detectOpenHandles": false
 }

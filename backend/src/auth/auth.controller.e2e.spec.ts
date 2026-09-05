@@ -12,7 +12,9 @@ import { TokenService } from './token.service';
 
 /**
  * End-to-end coverage of the Section 6.3 auth surface, against the seeded dev
- * tenant (`npm run db:seed` must have run for the DATABASE_URL in backend/.env).
+ * tenant. Run with `npm run test:e2e:local`, which brings up the throwaway
+ * pgvector container, migrates and seeds it. Never runs against Supabase —
+ * test/guard-database.ts refuses.
  *
  * The app is wired exactly as main.ts wires it — same global prefix, cookie
  * parser, 422 validation pipe and error filter — so what these tests exercise is

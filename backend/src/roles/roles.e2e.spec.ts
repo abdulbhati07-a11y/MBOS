@@ -21,7 +21,8 @@ import { PermissionEntry, RoleResponse } from './dto/role.dto';
  * write to one would corrupt every other suite's expectations — several of the
  * assertions below exist precisely to prove the API refuses such writes.
  *
- * Requires `npm run db:seed` to have run against DATABASE_URL in backend/.env.
+ * Run with `npm run test:e2e:local` (throwaway pgvector container, migrated and
+ * seeded). test/guard-database.ts refuses any non-disposable DATABASE_URL.
  */
 
 interface ErrorEnvelope {

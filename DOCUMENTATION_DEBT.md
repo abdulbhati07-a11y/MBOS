@@ -1009,6 +1009,36 @@ The third option is the one that actually restores the lost guarantee; it is del
 
 ---
 
+### DEBT-042 — the decoupled e2e harness has never been executed green; no Docker on the development machine
+
+**Where it needs to land:** Section 4.8 / the testing strategy, wherever the verification story is stated.
+
+**What needs to be written:** that the e2e suite's green status is currently unproven, and what proves it.
+
+The e2e suite was moved off the live Supabase project and onto an ephemeral pgvector container (`docker-compose.test.yml`, orchestrated by `backend/test/run-e2e.mjs`). Everything around that change is verified:
+
+- both Jest configs collect exactly the intended files — 15 unit specs, 14 e2e specs, no overlap;
+- the DATABASE_URL guard refuses Supabase, refuses unknown hosts, allows loopback and the CI service names, and fires in `globalSetup` before any worker spawns (demonstrated against a Supabase host: the run aborted with no connection attempted);
+- the AI provider guard binds the no-op under every test signal even with a key present, and still selects the real provider outside tests (9 unit tests);
+- the unit suite is green in ~18s, down from 324s, with no dangling-worker warning.
+
+What is **not** verified is the thing that matters most: a full e2e run, green, against the container. `docker` is not installed on the development machine (checked: no `docker`/`podman`/`nerdctl` on PATH, no Docker Desktop binaries or service, only a stale `C:\ProgramData\DockerDesktop` directory; WSL2 itself is present). The local PostgreSQL 18 service that *is* running cannot substitute — pgvector is not installed for it (no `vector.control`, no `vector.dll`), and `20260830000000_smart_search_pgvector` opens with `CREATE EXTENSION IF NOT EXISTS vector`.
+
+Pointed at the container URL with nothing listening, the harness behaves correctly up to that point: the guard passes (`[e2e] database host verified as throwaway: 127.0.0.1:55432`), the no-op provider is announced, and every suite then fails identically with `Can't reach database server at 127.0.0.1:55432`. So the wiring is right and the only missing input is a running container.
+
+**What closes this:** either
+
+1. install Docker Desktop and run `npm run test:e2e:local` — the intended path, and the only one that also exercises teardown; or
+2. open a PR, which now runs the `backend-e2e` job on every PR against the Actions service container. Note CI has never executed at all — `gh run list` returns `[]`, because the workflow triggers only on push/PR to `main` and this branch has neither.
+
+Until one of those happens, treat "the e2e suite passes" as an untested claim. In particular, the fourteen suites now run with `maxWorkers: 1` against a single shared database rather than in parallel as before; that is the safer configuration for marker-isolated fixtures, but the serial path has not been exercised either.
+
+**Source:** `docker-compose.test.yml`, `backend/test/run-e2e.mjs`, `backend/test/jest-e2e.json`, `backend/test/guard-database.ts`, `.github/workflows/ci.yml`.
+
+**Status:** Open — blocked on a container runtime or a first CI run, not on code. Nothing further can be verified locally.
+
+---
+
 ## Resolved
 
 *(None yet — items move here when the corresponding SRS section is written and reviewed.)*

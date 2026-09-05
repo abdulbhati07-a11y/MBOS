@@ -139,6 +139,48 @@ exposure and had N replicas racing on DDL. The frontend's
 
 ---
 
+## Running the tests
+
+Two suites, deliberately separated by what they need:
+
+```bash
+cd backend
+
+# Unit tests. No database, no network, ~15s.
+npm test
+
+# E2E tests. Needs Docker: brings up a throwaway pgvector Postgres,
+# migrates, seeds, runs, tears it down.
+npm run test:e2e:local
+```
+
+`npm test` collects `src/**/*.spec.ts` but excludes `*.e2e.spec.ts`. The
+e2e suites boot the full `AppModule` and write real rows, so they run
+only under `npm run test:e2e` against a disposable database
+(`docker-compose.test.yml`, pgvector on `127.0.0.1:55432` — a distinctive
+port so it cannot be confused with a local dev Postgres on 5432).
+
+Two guards make that separation enforced rather than conventional, and
+both fail loudly:
+
+- **`backend/test/guard-database.ts`** refuses to run any e2e test unless
+  `DATABASE_URL` resolves to a recognised throwaway host. A Supabase host
+  is refused unconditionally and cannot be overridden. This exists because
+  the e2e suites previously ran against the live Supabase project on every
+  `npm test`; they clean up in `afterAll`, but an interrupted run does not.
+- **`backend/src/config/test-environment.ts`** forces the no-op
+  `AIProviderInterface` binding whenever `JEST_WORKER_ID`, `NODE_ENV=test`
+  or `TEST_MODE=true` is present, reading `process.env` directly so no
+  config mock or `.env` value can defeat it. Before this, a real
+  `AI_API_KEY` in `backend/.env` meant `npm test` sent ~75 embedding
+  requests to a live, paid OpenAI account.
+
+Neither guard depends on anyone remembering to unset a variable. CI runs
+both suites on every PR, and the e2e job deliberately sets a sentinel
+`AI_API_KEY` so a regression in the provider guard fails the build.
+
+---
+
 ## Conventions
 
 - **No provider-specific SDKs in the application code.** The AI
